@@ -1,0 +1,19 @@
+{
+  "name": "com.hienadev.devtools",
+  "version": "1.0.0",
+  "displayName": "HienaDev Dev Tools",
+  "description": "Editor tools for every project: Build All (Windows + Web builds in one click, zipped, with a build report and itch.io publishing), Perf Doctor (a plain-language profiler), Audio Trimmer (cut, fade and loop sounds) and Game view screenshots.",
+  "unity": "6000.0",
+  "author": {
+    "name": "HienaDev"
+  },
+  "keywords": [
+    "build",
+    "itch.io",
+    "profiler",
+    "audio",
+    "screenshot",
+    "tools"
+  ],
+  "dependencies": {}
+}
