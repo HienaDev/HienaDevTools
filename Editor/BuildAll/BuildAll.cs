@@ -59,6 +59,11 @@ namespace HienaDev.DevTools
                 AssetDatabase.SaveAssets();
             }
             s.bump = EditorGUILayout.ToggleLeft(new GUIContent("Bump the version on every build (" + PlayerSettings.bundleVersion + " → " + BuildAll.Bump(PlayerSettings.bundleVersion) + ")"), s.bump);
+            int notes = Changelog.Next.entries.Count;
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField(notes == 0 ? "Changelog: no notes for the next version yet" : "Changelog: " + notes + " note" + (notes == 1 ? "" : "s") + " for the next version" + (s.bump ? " (saved as v" + BuildAll.Bump(PlayerSettings.bundleVersion) + " when you build)" : ""), EditorStyles.miniLabel);
+            if (GUILayout.Button("Open", EditorStyles.miniButton, GUILayout.Width(44))) ChangelogWindow.Open();
+            EditorGUILayout.EndHorizontal();
             EditorGUILayout.LabelField("Unity " + Application.unityVersion + "   ·   editor is on " + EditorUserBuildSettings.activeBuildTarget, EditorStyles.miniLabel);
             EditorGUILayout.EndVertical();
 
@@ -327,7 +332,12 @@ namespace HienaDev.DevTools
             if (EditorApplication.isPlayingOrWillChangePlaymode) { EditorUtility.DisplayDialog("Build All", "Stop Play mode first.", "OK"); return; }
             if (!UnityEditor.SceneManagement.EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
             var p = Settings;
-            if (p.bump) PlayerSettings.bundleVersion = Bump(PlayerSettings.bundleVersion);
+            if (p.bump)
+            {
+                PlayerSettings.bundleVersion = Bump(PlayerSettings.bundleVersion);
+                // the changelog's notes so far become this version's
+                if (Changelog.Release(PlayerSettings.bundleVersion)) Debug.Log("[Build All] changelog: notes saved as v" + PlayerSettings.bundleVersion);
+            }
             AssetDatabase.SaveAssets();
             var st = new State
             {
@@ -553,7 +563,7 @@ namespace HienaDev.DevTools
             }
             if (msg == null) msg = "Nothing was built.";
             if (isError) Debug.LogError("[Build All] " + msg); else Debug.Log("[Build All] done.\n" + msg);
-            var w = EditorWindow.GetWindow<BuildAllWindow>(false, "Build All", true); w.Repaint();
+            foreach (var bw in Resources.FindObjectsOfTypeAll<BuildAllWindow>()) bw.Repaint(); // (repaints it if it is open; never opens it)
             // publish to itch.io (only when ticked, everything built fine, and not a development build)
             bool publish = st != null && st.publish && !st.cancel && st.report.platforms.Count > 0 && st.report.platforms.All(p => p.ok);
             if (publish) msg += "\n\nPublishing to itch.io now (" + Settings.itchPage + "): progress in the Build All window and the Console.";

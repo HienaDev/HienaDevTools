@@ -1,7 +1,7 @@
 {
     "name": "HienaDev.DevTools.Editor",
     "rootNamespace": "HienaDev.DevTools",
-    "references": [],
+    "references": [ "UnityEngine.UI", "HienaDev.DevTools" ],
     "includePlatforms": [ "Editor" ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
@@ -9,6 +9,8 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        { "name": "com.unity.ugui", "expression": "1.0.0", "define": "HIENADEV_UGUI" }
+    ],
     "noEngineReferences": false
 }

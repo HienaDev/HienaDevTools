@@ -1,8 +1,8 @@
 {
   "name": "com.hienadev.devtools",
-  "version": "1.0.0",
+  "version": "1.6.0",
   "displayName": "HienaDev Dev Tools",
-  "description": "Editor tools for every project: Build All (Windows + Web builds in one click, zipped, with a build report and itch.io publishing), Perf Doctor (a plain-language profiler), Audio Trimmer (cut, fade and loop sounds) and Game view screenshots.",
+  "description": "Editor tools for every project: Build All (Windows + Web builds in one click, zipped, with a build report and itch.io publishing), Perf Doctor (a plain-language profiler), Audio Trimmer (cut, fade and loop sounds), Game view screenshots and an Itch Page Kit (cover, screenshots, banner, GIF maker) a Web Size Tester, a Play toolbar, scene switcher, jam timer, Hierarchy notes/TODO and icons, folder colours, Find References, Bulk Rename, a Changelog, Missing Scripts, selection history and Favourites.",
   "unity": "6000.0",
   "author": {
     "name": "HienaDev"
