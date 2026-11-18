@@ -29,9 +29,9 @@ namespace HienaDev.DevTools
             s = j.Length > 0 ? JsonUtility.FromJson<State>(j) : new State();
             Selection.selectionChanged += Changed;
             // (also checked each editor tick: the event doesn't always arrive, e.g. while Unity is in the background)
-            EditorApplication.update += () => { int id = Selection.activeInstanceID; if (id != s_LastId) { s_LastId = id; Changed(); } };
+            EditorApplication.update += () => { var id = Selection.activeObject; if (id != s_LastId) { s_LastId = id; Changed(); } };
         }
-        static int s_LastId;
+        static UnityEngine.Object s_LastId;
 
         static void Save() { SessionState.SetString("HienaDev.SelectionHistory", JsonUtility.ToJson(s)); Refresh(); }
 

@@ -18,18 +18,24 @@ namespace HienaDev.DevTools
         static readonly HashSet<System.Type> Skip = new HashSet<System.Type> { typeof(Transform), typeof(RectTransform), typeof(CanvasRenderer), typeof(DevNote) };
         static GUIStyle s_Tag;
 
+#if UNITY_6000_6_OR_NEWER
+        static HierarchyLooks() { EditorApplication.hierarchyWindowItemByEntityIdOnGUI += OnItem; }
+        static void OnItem(EntityId id, Rect r)
+        {
+            var go = EditorUtility.EntityIdToObject(id) as GameObject;
+#else
         static HierarchyLooks() { EditorApplication.hierarchyWindowItemOnGUI += OnItem; }
-
         static void OnItem(int id, Rect r)
         {
             var go = EditorUtility.InstanceIDToObject(id) as GameObject;
+#endif
             if (!go) return;
-            if (DevToolsSettings.HierarchyIcons) DrawIcon(id, go, r);
+            if (DevToolsSettings.HierarchyIcons) DrawIcon(go, r);
             if (DevToolsSettings.HierarchyNotes) DrawNote(go, r);
         }
 
         // ---- the icon on the left
-        static void DrawIcon(int id, GameObject go, Rect r)
+        static void DrawIcon(GameObject go, Rect r)
         {
             if (EditorGUIUtility.GetIconForObject(go) != null) return; // (an icon picked for this object: Unity draws it)
             if (PrefabUtility.IsAnyPrefabInstanceRoot(go)) return;    // (prefabs keep the blue cube: it says "prefab")
@@ -39,17 +45,17 @@ namespace HienaDev.DevTools
             var tex = EditorGUIUtility.ObjectContent(main, main.GetType()).image;
             if (!tex) return;
             var ir = new Rect(r.x, r.y, 16, 16);
-            EditorGUI.DrawRect(ir, RowColour(id, r));
+            EditorGUI.DrawRect(ir, RowColour(go, r));
             var old = GUI.color; if (!go.activeInHierarchy) GUI.color = new Color(1, 1, 1, 0.45f);
             GUI.DrawTexture(ir, tex, ScaleMode.ScaleToFit);
             GUI.color = old;
         }
 
         // the Hierarchy's own background under the icon (selected, hovered or plain)
-        static Color RowColour(int id, Rect r)
+        static Color RowColour(GameObject go, Rect r)
         {
             bool pro = EditorGUIUtility.isProSkin;
-            if (Selection.Contains(id))
+            if (Selection.Contains(go))
             {
                 bool focused = EditorWindow.focusedWindow != null && EditorWindow.focusedWindow.GetType().Name == "SceneHierarchyWindow";
                 return focused ? (pro ? new Color(0.172f, 0.365f, 0.529f) : new Color(0.227f, 0.447f, 0.69f)) : (pro ? new Color(0.3f, 0.3f, 0.3f) : new Color(0.68f, 0.68f, 0.68f));

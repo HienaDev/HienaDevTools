@@ -1,7 +1,7 @@
 {
     "name": "HienaDev.DevTools",
     "rootNamespace": "HienaDev.DevTools",
-    "references": [],
+    "references": [ "UnityEngine.UI" ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
@@ -9,6 +9,8 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        { "name": "com.unity.ugui", "expression": "1.0.0", "define": "HIENADEV_UGUI" }
+    ],
     "noEngineReferences": false
 }

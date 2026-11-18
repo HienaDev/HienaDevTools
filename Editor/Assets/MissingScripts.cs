@@ -58,7 +58,7 @@ namespace HienaDev.DevTools
                 if (!c) continue;
                 var so = new SerializedObject(c); var it = so.GetIterator();
                 while (it.NextVisible(true))
-                    if (it.propertyType == SerializedPropertyType.ObjectReference && it.objectReferenceValue == null && it.objectReferenceInstanceIDValue != 0)
+                    if (it.propertyType == SerializedPropertyType.ObjectReference && it.objectReferenceValue == null && HasRef(it))
                         broken.Add(c.GetType().Name + " › " + it.displayName);
             }
             if (missing == 0 && broken.Count == 0) return;
@@ -135,5 +135,12 @@ namespace HienaDev.DevTools
             Debug.Log("[Missing Scripts] removed " + removed);
             Scan();
         }
+
+        // (a reference that points at something that's gone: it still holds an id)
+#if UNITY_6000_6_OR_NEWER
+        static bool HasRef(SerializedProperty p) => p.objectReferenceEntityIdValue != default(EntityId);
+#else
+        static bool HasRef(SerializedProperty p) => p.objectReferenceInstanceIDValue != 0;
+#endif
     }
 }

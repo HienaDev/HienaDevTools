@@ -270,7 +270,12 @@ namespace HienaDev.DevTools
             {
                 FrameTimingManager.CaptureFrameTimings();
                 if (FrameTimingManager.GetLatestTimings(1, m_Timing) > 0) { if (m_Timing[0].gpuFrameTime > 0) m_Gpu.Add((float)m_Timing[0].gpuFrameTime); m_CpuMain.Add((float)m_Timing[0].cpuMainThreadFrameTime); }
-                m_Batches.Add(UnityStats.batches); m_SetPass.Add(UnityStats.setPassCalls); m_Tris.Add(UnityStats.triangles); m_Shadow.Add(UnityStats.shadowCasters);
+#if UNITY_6000_6_OR_NEWER
+                m_Batches.Add(UnityStats.drawCalls); // (6.6 dropped "batches"; draw calls is the nearest number)
+#else
+                m_Batches.Add(UnityStats.batches);
+#endif
+                m_SetPass.Add(UnityStats.setPassCalls); m_Tris.Add(UnityStats.triangles); m_Shadow.Add(UnityStats.shadowCasters);
             }
             if (now >= m_RecordUntil || (!m_PlayerTarget && !EditorApplication.isPlaying)) StopRecording(true);
             Repaint();

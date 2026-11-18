@@ -200,6 +200,8 @@ namespace HienaDev.DevTools
             var inBuild = EditorBuildSettings.scenes.Where(s => File.Exists(s.path)).Select(s => s.path).ToList();
             var all = AssetDatabase.FindAssets("t:SceneAsset", new[] { "Assets" }).Select(AssetDatabase.GUIDToAssetPath).OrderBy(p => p).ToList();
             string open = SceneManager.GetActiveScene().path;
+            menu.AddItem(new GUIContent("Scene gallery (pictures)..."), false, SceneGallery.Open);
+            menu.AddSeparator("");
             foreach (var p in inBuild) menu.AddItem(new GUIContent("In the build/" + Path.GetFileNameWithoutExtension(p)), p == open, () => OpenScene(p));
             var others = all.Where(p => !inBuild.Contains(p)).ToList();
             if (inBuild.Count > 0 && others.Count > 0) menu.AddSeparator("");

@@ -100,6 +100,10 @@ namespace HienaDev.DevTools
             if (scenes.Length == 0) EditorGUILayout.HelpBox("No scenes are ticked in the build list.", MessageType.Error);
             EditorGUILayout.EndVertical();
 
+            // ---- the pre-build check and the quick player settings
+            BuildChecks.Draw(s, m_Box, m_Big);
+            BuildChecks.DrawQuickSettings(m_Box, m_Big);
+
             // ---- build
             EditorGUILayout.BeginVertical(m_Box);
             EditorGUILayout.BeginHorizontal();
@@ -332,6 +336,7 @@ namespace HienaDev.DevTools
             if (EditorApplication.isPlayingOrWillChangePlaymode) { EditorUtility.DisplayDialog("Build All", "Stop Play mode first.", "OK"); return; }
             if (!UnityEditor.SceneManagement.EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
             var p = Settings;
+            if (!BuildChecks.OkToBuild(p)) return;
             if (p.bump)
             {
                 PlayerSettings.bundleVersion = Bump(PlayerSettings.bundleVersion);
