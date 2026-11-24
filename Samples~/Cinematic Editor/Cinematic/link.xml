@@ -1,0 +1,14 @@
+<!--
+  Keeps code that the Cinematic Controller reaches by name, so Unity doesn't strip it from builds.
+  Without this, the cinematic's own cameras (used for camera looks, multiviews, pop-ups, overlays...) can lose your
+  camera's HDRP settings in a build: frame settings, volumes, custom passes (e.g. a Gaussian splat pass) and exposure.
+  Put this file anywhere inside your Assets folder.
+-->
+<linker>
+  <assembly fullname="Unity.RenderPipelines.HighDefinition.Runtime" ignoreIfMissing="1">
+    <type fullname="UnityEngine.Rendering.HighDefinition.HDAdditionalCameraData" preserve="all"/>
+  </assembly>
+  <assembly fullname="Unity.RenderPipelines.Universal.Runtime" ignoreIfMissing="1">
+    <type fullname="UnityEngine.Rendering.Universal.UniversalAdditionalCameraData" preserve="all"/>
+  </assembly>
+</linker>

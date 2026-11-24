@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
 
@@ -13,9 +15,9 @@ namespace HienaDev.DevTools
     /// volume, then save it as a new .wav next to the original (or overwrite a .wav).
     /// Keys: Space play/pause, Home go to start, Enter play the selection.
     /// </summary>
-    public class AudioTrimmer : EditorWindow
+    public partial class AudioTrimmer : EditorWindow
     {
-        AudioClip clip;
+        [SerializeField] AudioClip clip;
         float[] samples; // interleaved
         int channels = 1, rate = 44100, frames;
         string loadError;
@@ -29,14 +31,21 @@ namespace HienaDev.DevTools
         [SerializeField] int activeRegion = -1;
         // finding sounds
         float threshDb = -40f, minGap = 0.08f, minLen = 0.03f, pad = 0.01f;
-        bool showEffects = true, showLoop, showFind, showRegions = true;
-        Vector2 scroll;
         // the name the trimmed sound is saved as (without .wav)
-        string saveName = "";
+        [SerializeField] string saveName = "";
         bool loop = true, playSelectionOnly = true;
-        [SerializeField] bool normalize;
         // the view (zoom), in seconds
-        float viewStart, viewEnd;
+        [SerializeField] float viewStart, viewEnd;
+
+        // cleaning up: taking out the background sound
+        [SerializeField] bool cleanOn;
+        [SerializeField] float bgFrom = -1f, bgTo = -1f;                 // the bit it learned the background from (seconds)
+        [SerializeField] float cleanStrength = 0.5f, cleanAmount = 24f, rumble, gaps;
+        bool hearRemoved;
+        float[] cleaned, removed; string cleanedKey = "", cleanJobKey;
+        Task<float[]> cleanJob; CancellationTokenSource cleanStop; double cleanAt = -1;
+        string openName = "";                                            // the name box at the top
+        string nameAll = "";                                             // one name for every region
 
         // playback
         GameObject player;
@@ -54,7 +63,7 @@ namespace HienaDev.DevTools
         double restartAt = -1; // a change to the volume / fades waits a moment before rebuilding the preview
         float lastDrawnHead = -1f;
         Material lineMat;
-        enum Drag { None, Start, End, Make, Seek, Pan }
+        enum Drag { None, Start, End, Make, Seek, Pan, FadeIn, FadeOut, Volume }
         Drag drag;
         float dragAnchor;
 
@@ -70,7 +79,7 @@ namespace HienaDev.DevTools
         public static void Open(AudioClip c)
         {
             var w = GetWindow<AudioTrimmer>("Audio Trimmer");
-            w.minSize = new Vector2(560, 360);
+            w.minSize = new Vector2(860, 560);
             if (c) w.Load(c);
         }
 
@@ -78,12 +87,15 @@ namespace HienaDev.DevTools
         {
             EditorApplication.update += Tick;
             Undo.undoRedoPerformed += OnUndoRedo;
+            // (after a script change or a restart: the same sound again, with the same selection and settings)
+            if (clip && samples == null && AudioIO.Read(clip, out samples, out channels, out rate, out loadError)) { frames = samples.Length / Mathf.Max(1, channels); openName = Path.GetFileNameWithoutExtension(AssetDatabase.GetAssetPath(clip)); nameAll = openName; selEnd = Mathf.Min(selEnd, Length); if (viewEnd <= viewStart) { viewStart = 0; viewEnd = Length; } previewDirty = true; BuildPeaks(); }
         }
 
         void OnDisable()
         {
             EditorApplication.update -= Tick;
             Undo.undoRedoPerformed -= OnUndoRedo;
+            StopCleaning(); loopStop?.Cancel(); if (micClip) { Microphone.End(micName); micClip = null; }
             Stop();
             if (player) DestroyImmediate(player);
             if (previewClip) DestroyImmediate(previewClip);
@@ -96,28 +108,14 @@ namespace HienaDev.DevTools
         {
             Stop();
             clip = c;
-            samples = null;
+            StopCleaning();
+            samples = cleaned = removed = null; cleanedKey = "";
+            cleanOn = hearRemoved = false; bgFrom = bgTo = -1f; rumble = gaps = 0f;
             loadError = null;
             previewDirty = true;
             if (!clip) return;
             string path = AssetDatabase.GetAssetPath(clip);
-            try
-            {
-                if (path.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) && ReadWav(File.ReadAllBytes(path), out samples, out channels, out rate)) { }
-                else
-                {
-                    channels = clip.channels;
-                    rate = clip.frequency;
-                    samples = new float[clip.samples * clip.channels];
-                    if (!clip.GetData(samples, 0)) { samples = null; loadError = "Unity can't read this sound's samples."; }
-                }
-            }
-            catch (Exception e) { samples = null; loadError = e.Message; }
-            if (samples == null)
-            {
-                loadError = (loadError ?? "") + " Set its Load Type to \"Decompress On Load\" (button below) and try again.";
-                return;
-            }
+            if (!AudioIO.Read(clip, out samples, out channels, out rate, out loadError)) return;
             frames = samples.Length / Mathf.Max(1, channels);
             selStart = 0f;
             selEnd = Length;
@@ -131,10 +129,14 @@ namespace HienaDev.DevTools
             activeRegion = -1;
             Undo.ClearUndo(this);
             saveName = Path.GetFileNameWithoutExtension(path) + (Path.GetFileNameWithoutExtension(path).EndsWith("_trim") ? "" : "_trim");
-            normalize = false;
+            ClearFx(); linked = -1; loopSpots = null; levelNow = float.NaN; levelShort = 0;
+            openName = Path.GetFileNameWithoutExtension(path); nameAll = openName;
             BuildPeaks();
             waveFrom = waveTo = -1f; // redraw
         }
+
+        /// <summary>The sound as it is now: cleaned up (or only what was taken out), or just as it was recorded.</summary>
+        float[] Src => cleanOn && cleaned != null ? (hearRemoved ? removed : cleaned) : samples;
 
         void BuildPeaks()
         {
@@ -146,7 +148,7 @@ namespace HienaDev.DevTools
                 int end = Mathf.Min(frames, (b + 1) * SmallBlock) * channels;
                 for (int i = b * SmallBlock * channels; i < end; i++)
                 {
-                    float v = samples[i];
+                    float v = Src[i];
                     if (v < lo) lo = v; else if (v > hi) hi = v;
                 }
                 smallLo[b] = lo; smallHi[b] = hi;
@@ -180,7 +182,7 @@ namespace HienaDev.DevTools
             {
                 for (int i = a * channels, e = Mathf.Min(frames, b) * channels; i < e; i++)
                 {
-                    float v = samples[i];
+                    float v = Src[i];
                     if (v < lo) lo = v; else if (v > hi) hi = v;
                 }
             }
@@ -190,195 +192,91 @@ namespace HienaDev.DevTools
 
         // ------------------------------------------------------------------ the window
 
-        void OnGUI()
+        // ------------------------------------------------------------------ the name
+
+        /// <summary>The sound's name, to type over: Enter renames the file (everything that uses it keeps working).</summary>
+        void NameRow()
         {
-            HandleKeys();
-            // every change made in this window can be undone with Ctrl+Z (Unity groups a whole drag into one step)
-            if (samples != null) Undo.RecordObject(this, "Audio Trimmer");
-            EditorGUILayout.Space(4);
-            using (new EditorGUILayout.HorizontalScope())
+            string now = Path.GetFileNameWithoutExtension(AssetDatabase.GetAssetPath(clip));
+            var e = Event.current;
+            bool enter = e.type == EventType.KeyDown && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter) && GUI.GetNameOfFocusedControl() == "AudioName";
+            bool esc = e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape && GUI.GetNameOfFocusedControl() == "AudioName";
+            if (enter) { e.Use(); RenameTo(openName); GUIUtility.keyboardControl = 0; }
+            if (esc) { e.Use(); openName = now; GUIUtility.keyboardControl = 0; }
             {
-                var c = (AudioClip)EditorGUILayout.ObjectField("Sound", clip, typeof(AudioClip), false);
-                if (c != clip) Load(c);
-                if (GUILayout.Button("Use selected", GUILayout.Width(100)) && Selection.activeObject is AudioClip sel) Load(sel);
+                GUI.SetNextControlName("AudioName");
+                openName = EditorGUILayout.TextField(openName, new GUIStyle(EditorStyles.textField) { fontSize = 15, fontStyle = FontStyle.Bold, fixedHeight = 26 }, GUILayout.Height(26));
+                bool changed = CleanName(openName) != now && CleanName(openName).Length > 0;
+                using (new EditorGUI.DisabledScope(!changed))
+                    if (GUILayout.Button(new GUIContent("Rename", "Renames this sound's file. Everything that uses it keeps working. (Enter does the same, Escape puts the name back.)"), GUILayout.Height(26), GUILayout.Width(80))) { RenameTo(openName); GUIUtility.keyboardControl = 0; }
             }
-            if (!clip) { EditorGUILayout.HelpBox("Pick a sound above, or right-click a sound in the Project window > Trim Audio.", MessageType.Info); return; }
-            if (samples == null)
-            {
-                EditorGUILayout.HelpBox(loadError, MessageType.Warning);
-                if (GUILayout.Button("Set Load Type to Decompress On Load")) MakeReadable();
-                return;
-            }
+        }
 
-            // the waveform, the regions strip and the timeline
-            var area = GUILayoutUtility.GetRect(100, 10000, 190, 320);
-            var ruler = new Rect(area.x, area.y, area.width, 18);
-            var strip = new Rect(area.x, area.y + 18, area.width, 16);
-            var waveRect = new Rect(area.x, area.y + 34, area.width, area.height - 34);
-            DrawRuler(ruler);
-            DrawStrip(strip);
-            DrawWave(waveRect);
-            HandleMouse(waveRect, ruler, strip);
+        // ------------------------------------------------------------------ cleaning up
 
-            // zoom
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                GUILayout.Label("View", GUILayout.Width(40));
-                float a = viewStart, b = viewEnd;
-                EditorGUILayout.MinMaxSlider(ref a, ref b, 0f, Length);
-                if (b - a > 0.01f) { viewStart = a; viewEnd = b; }
-                if (GUILayout.Button("Zoom to selection", GUILayout.Width(130))) { viewStart = selStart; viewEnd = selEnd; }
-                if (GUILayout.Button("All", GUILayout.Width(40))) { viewStart = 0f; viewEnd = Length; }
-            }
+        string CleanKey => cleanOn ? $"{bgFrom:0.000}|{bgTo:0.000}|{cleanStrength:0.00}|{cleanAmount:0.0}|{rumble:0}|{gaps:0.0}" : "";
 
-            // transport
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                bool isPlaying = source && source.isPlaying;
-                if (GUILayout.Button(isPlaying ? "❚❚ Pause" : (paused ? "▶ Resume" : "▶ Play"), GUILayout.Height(28), GUILayout.Width(110))) TogglePlay();
-                if (GUILayout.Button("■ Stop", GUILayout.Height(28), GUILayout.Width(80))) { Stop(); cursor = playSelectionOnly ? selStart : 0f; }
-                if (GUILayout.Button("⏮ Start", GUILayout.Height(28), GUILayout.Width(80))) { Stop(); cursor = selStart; }
-                loop = GUILayout.Toggle(loop, " Loop", GUILayout.Width(60));
-                bool only = GUILayout.Toggle(playSelectionOnly, " Play only the selection", GUILayout.Width(180));
-                if (only != playSelectionOnly) { playSelectionOnly = only; Stop(); }
-                GUILayout.FlexibleSpace();
-                if (GUILayout.Button(new GUIContent("↶ Undo", "Ctrl+Z"), GUILayout.Width(64))) Undo.PerformUndo();
-                if (GUILayout.Button(new GUIContent("↷ Redo", "Ctrl+Y"), GUILayout.Width(64))) Undo.PerformRedo();
-                if (GUILayout.Button(new GUIContent("Reset", "Back to the whole sound with no changes (can be undone)."), GUILayout.Width(52))) ResetAll();
-                GUILayout.Label($"{Fmt(Playhead())} / {Fmt(Length)}", EditorStyles.boldLabel, GUILayout.Width(130));
-            }
+        void LearnQuietest()
+        {
+            if (!AudioCleaner.FindQuietest(samples, channels, rate, 0.4f, out int f0, out int f1)) { ShowNotification(new GUIContent("No background found: the quiet parts are completely silent")); return; }
+            bgFrom = f0 / (float)rate; bgTo = f1 / (float)rate; cleanOn = true;
+        }
 
-            scroll = EditorGUILayout.BeginScrollView(scroll);
-            EditorGUI.BeginChangeCheck();
+        void StopCleaning() { cleanStop?.Cancel(); cleanStop = null; cleanJob = null; cleanJobKey = null; }
 
-            // selection
-            using (new EditorGUILayout.HorizontalScope())
+        // the work happens in the background; when it's done the waveform and the preview follow
+        void CleanTick()
+        {
+            if (samples == null) return;
+            string key = CleanKey;
+            if (cleanJob != null && cleanJob.IsCompleted)
             {
-                selStart = Mathf.Clamp(EditorGUILayout.FloatField("Start (s)", selStart), 0f, Length);
-                selEnd = Mathf.Clamp(EditorGUILayout.FloatField("End (s)", selEnd), 0f, Length);
-                if (selEnd < selStart + 0.005f) selEnd = Mathf.Min(Length, selStart + 0.005f);
-                GUILayout.Label($"length {Fmt(selEnd - selStart)}", GUILayout.Width(110));
+                if (cleanJob.Status == TaskStatus.RanToCompletion && cleanJobKey == key) SetCleaned(cleanJob.Result, key);
+                else if (cleanJob.IsFaulted) { Debug.LogWarning("[Audio Trimmer] Couldn't clean the sound: " + cleanJob.Exception.GetBaseException().Message); cleanedKey = key; }
+                cleanJob = null;
+                Repaint();
             }
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (GUILayout.Button(new GUIContent("Snap edges to zero", "Moves the start and end to the nearest point where the wave crosses zero, so there's no click."))) SnapToZero();
-                if (GUILayout.Button(new GUIContent("Trim silence", "Cuts the quiet bits off both ends of the selection (uses the Quiet below level from Find sounds)."))) TrimSilence();
-            }
+            if (key == cleanedKey) return;
+            if (key.Length == 0) { StopCleaning(); cleanedKey = ""; SourceChanged(); if (source && source.isPlaying) Restart(); Repaint(); return; }
+            if (cleanJob != null && cleanJobKey != key) { cleanStop.Cancel(); return; }
+            if (cleanJob == null && GUIUtility.hotControl == 0 && EditorApplication.timeSinceStartup > cleanAt) { cleanJob = StartCleaning(key); Repaint(); }
+        }
 
-            // effects
-            showEffects = EditorGUILayout.Foldout(showEffects, "Volume, fades and pitch", true);
-            if (showEffects)
-            {
-                EditorGUI.indentLevel++;
-                float maxFade = Mathf.Max(0f, (selEnd - selStart) * 0.5f);
-                using (new EditorGUI.DisabledScope(loopFade > 0f))
-                {
-                    fadeIn = EditorGUILayout.Slider("Fade in (s)", fadeIn, 0f, maxFade);
-                    fadeOut = EditorGUILayout.Slider("Fade out (s)", fadeOut, 0f, maxFade);
-                }
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    gainDb = EditorGUILayout.Slider("Volume (dB)", gainDb, -24f, 24f);
-                    normalize = GUILayout.Toggle(normalize, " Normalize (as loud as it goes)", GUILayout.Width(220));
-                }
-                pitch = EditorGUILayout.Slider(new GUIContent("Pitch (semitones)", "Higher is faster and shorter, lower is slower and longer, like speeding up a tape. 12 = an octave."), pitch, -12f, 12f);
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    float speed = Speed;
-                    float ns = EditorGUILayout.Slider(new GUIContent("Speed", "The same thing as Pitch, as a speed (2 = twice as fast and an octave higher)."), speed, 0.5f, 2f);
-                    if (!Mathf.Approximately(ns, speed)) pitch = Mathf.Clamp(12f * Mathf.Log(ns, 2f), -12f, 12f);
-                    if (GUILayout.Button("Random ±2", GUILayout.Width(80))) pitch = UnityEngine.Random.Range(-2f, 2f);
-                }
-                EditorGUI.indentLevel--;
-            }
+        Task<float[]> StartCleaning(string key)
+        {
+            cleanStop = new CancellationTokenSource(); cleanJobKey = key;
+            var stop = cleanStop.Token; var src = samples; int ch = channels, r = rate, f0 = Mathf.RoundToInt(bgFrom * rate), f1 = Mathf.RoundToInt(bgTo * rate);
+            bool learn = bgTo > bgFrom; var s = new AudioCleaner.Settings { strength = cleanStrength, amountDb = cleanAmount, rumbleHz = rumble, gapsDb = gaps };
+            return Task.Run(() => AudioCleaner.Clean(src, ch, r, learn ? AudioCleaner.Learn(src, ch, f0, f1) : null, s, stop));
+        }
 
-            // seamless loop
-            showLoop = EditorGUILayout.Foldout(showLoop, "Make a seamless loop", true);
-            if (showLoop)
-            {
-                EditorGUI.indentLevel++;
-                float maxLoop = Mathf.Max(0f, Mathf.Min(4f, (selEnd - selStart) * 0.45f));
-                loopFade = EditorGUILayout.Slider(new GUIContent("Crossfade (s)", "Blends the end of the selection into its start, so it loops without a jump. 0 = off. The saved sound is shorter by this much."), loopFade, 0f, maxLoop);
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    if (GUILayout.Button(new GUIContent("Find a good loop", "Nudges the end to where the sound best matches its start, and sets a crossfade."))) FindLoop();
-                    if (GUILayout.Button("Listen to the loop")) { loop = true; playSelectionOnly = true; Stop(); previewDirty = true; Play(selStart); }
-                }
-                EditorGUILayout.LabelField(loopFade > 0f ? "Loop on: fades are off, and Save writes the looping version." : "Pick the part that loops, then Find a good loop (or set a crossfade yourself).", EditorStyles.wordWrappedMiniLabel);
-                EditorGUI.indentLevel--;
-            }
+        void SetCleaned(float[] a, string key)
+        {
+            cleaned = a; removed = new float[a.Length];
+            for (int i = 0; i < a.Length; i++) removed[i] = samples[i] - a[i];
+            cleanedKey = key;
+            SourceChanged();
+            if (source && source.isPlaying) Restart();
+        }
 
-            // finding sounds in a file of many
-            showFind = EditorGUILayout.Foldout(showFind, "Find sounds (a file with many, like footsteps)", true);
-            if (showFind)
-            {
-                EditorGUI.indentLevel++;
-                threshDb = EditorGUILayout.Slider(new GUIContent("Quiet below (dB)", "Anything quieter than this, compared to the loudest part, counts as silence. Lower finds softer sounds."), threshDb, -70f, -6f);
-                minGap = EditorGUILayout.Slider(new GUIContent("Silence between (s)", "How long a quiet gap has to be to split two sounds."), minGap, 0.01f, 1f);
-                minLen = EditorGUILayout.Slider(new GUIContent("Shortest sound (s)", "Blips shorter than this are ignored."), minLen, 0.005f, 0.5f);
-                pad = EditorGUILayout.Slider(new GUIContent("Padding (s)", "A little extra kept before and after each sound."), pad, 0f, 0.2f);
-                if (GUILayout.Button("Find sounds", GUILayout.Height(24))) FindSounds();
-                EditorGUI.indentLevel--;
-            }
-            bool changed = EditorGUI.EndChangeCheck();
+        /// <summary>Before saving: makes sure what's saved is the cleaned sound with the settings as they are now.</summary>
+        void FinishCleaning()
+        {
+            hearRemoved = false;
+            string key = CleanKey;
+            if (key.Length == 0 || key == cleanedKey) { SourceChanged(); return; }
+            EditorUtility.DisplayProgressBar("Audio Trimmer", "Cleaning the sound...", 0.5f);
+            try { StopCleaning(); SetCleaned(StartCleaning(key).GetAwaiter().GetResult(), key); }
+            finally { cleanJob = null; EditorUtility.ClearProgressBar(); }
+        }
 
-            // regions
-            showRegions = EditorGUILayout.Foldout(showRegions, $"Regions ({regions.Count})", true);
-            if (showRegions)
-            {
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    if (GUILayout.Button(new GUIContent("Add selection as region", "Key A"))) AddRegion();
-                    using (new EditorGUI.DisabledScope(regions.Count == 0))
-                    {
-                        if (GUILayout.Button("Save all regions", GUILayout.Width(130))) SaveRegions();
-                        if (GUILayout.Button("Clear", GUILayout.Width(60))) { regions.Clear(); activeRegion = -1; }
-                    }
-                }
-                int remove = -1;
-                for (int i = 0; i < regions.Count; i++)
-                {
-                    var rg = regions[i];
-                    using (new EditorGUILayout.HorizontalScope(i == activeRegion ? EditorStyles.helpBox : GUIStyle.none))
-                    {
-                        GUILayout.Label((i + 1).ToString(), GUILayout.Width(22));
-                        rg.name = EditorGUILayout.TextField(rg.name);
-                        GUILayout.Label($"{Fmt(rg.start)} – {Fmt(rg.end)}", EditorStyles.miniLabel, GUILayout.Width(130));
-                        if (GUILayout.Button("Select", GUILayout.Width(52))) SelectRegion(i, false);
-                        if (GUILayout.Button("▶", GUILayout.Width(26))) SelectRegion(i, true);
-                        if (GUILayout.Button("✕", GUILayout.Width(24))) remove = i;
-                    }
-                }
-                if (remove >= 0) { regions.RemoveAt(remove); if (activeRegion == remove) activeRegion = -1; else if (activeRegion > remove) activeRegion--; }
-            }
-            EditorGUILayout.EndScrollView();
-
-            if (changed)
-            {
-                previewDirty = true;
-                if (source && source.isPlaying) restartAt = EditorApplication.timeSinceStartup + 0.15; // wait until the slider settles
-            }
-            // the picked region follows its edges
-            if (activeRegion >= 0 && activeRegion < regions.Count) { regions[activeRegion].start = selStart; regions[activeRegion].end = selEnd; }
-
-            // saving
-            EditorGUILayout.Space(4);
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                saveName = EditorGUILayout.TextField(new GUIContent("Name", "What the trimmed sound is called (saved as a .wav next to the original). Rename changes the name of the sound that's open now."), saveName);
-                using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(saveName) || CleanName(saveName) == Path.GetFileNameWithoutExtension(AssetDatabase.GetAssetPath(clip))))
-                    if (GUILayout.Button("Rename this sound", GUILayout.Width(130))) Rename();
-            }
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (GUILayout.Button("Save as new .wav", GUILayout.Height(28))) Save(false);
-                bool isWav = AssetDatabase.GetAssetPath(clip).EndsWith(".wav", StringComparison.OrdinalIgnoreCase);
-                using (new EditorGUI.DisabledScope(!isWav))
-                    if (GUILayout.Button(isWav ? "Overwrite this .wav" : "Overwrite (only .wav files)", GUILayout.Height(28))
-                        && EditorUtility.DisplayDialog("Overwrite?", $"Replace {Path.GetFileName(AssetDatabase.GetAssetPath(clip))} with the trimmed version? This can't be undone.", "Overwrite", "Cancel"))
-                        Save(true);
-            }
-            EditorGUILayout.LabelField("Drag on the waveform to pick a part, drag its edges to change it. Click the ruler to move the playhead, click a region in the strip under it to pick it. Middle-drag or Alt-drag pans, the wheel zooms. Space: play/pause, A: add region, Ctrl+Z: undo.", EditorStyles.wordWrappedMiniLabel);
+        void SourceChanged()
+        {
+            if (samples == null) return;
+            previewDirty = true;
+            BuildPeaks();
+            waveFrom = waveTo = -1f;
+            Repaint();
         }
 
         // ------------------------------------------------------------------ regions
@@ -446,6 +344,7 @@ namespace HienaDev.DevTools
                 keepBoth = pick == 2;
             }
             Stop();
+            FinishCleaning();
             float s0 = selStart, e0 = selEnd;
             try
             {
@@ -476,7 +375,7 @@ namespace HienaDev.DevTools
             {
                 float m = 0f;
                 int end = Mathf.Min(frames, (b + 1) * block) * channels;
-                for (int i = b * block * channels; i < end; i++) { float v = Mathf.Abs(samples[i]); if (v > m) m = v; }
+                for (int i = b * block * channels; i < end; i++) { float v = Mathf.Abs(Src[i]); if (v > m) m = v; }
                 env[b] = m;
             }
             return env;
@@ -523,7 +422,6 @@ namespace HienaDev.DevTools
                 if (i < found.Count - 1) e = Mathf.Min(e, (found[i].y + found[i + 1].x) * 0.5f);
                 regions.Add(new Region { start = SnapZero(s), end = SnapZero(e), name = $"{BaseName}_{i + 1:00}" });
             }
-            showRegions = true;
             SelectRegion(0, false);
             viewStart = 0f; viewEnd = Length;
             Debug.Log($"[Audio Trimmer] Found {regions.Count} sounds. Rename them in the Regions list and press Save all regions.");
@@ -562,7 +460,7 @@ namespace HienaDev.DevTools
                 foreach (int g in new[] { f - d, f + d })
                 {
                     if (g < 1 || g >= frames) continue;
-                    float a = samples[(g - 1) * channels], b = samples[g * channels];
+                    float a = Src[(g - 1) * channels], b = Src[g * channels];
                     if (a == 0f || (a < 0f) != (b < 0f)) return g / (float)rate;
                 }
             }
@@ -591,7 +489,7 @@ namespace HienaDev.DevTools
                 double score = 0;
                 for (int i = 0; i < win; i += 2)
                 {
-                    float d = samples[(e + i) * channels] - samples[(s + i) * channels];
+                    float d = Src[(e + i) * channels] - Src[(s + i) * channels];
                     score += d * d;
                 }
                 if (score < bestScore) { bestScore = score; best = e; }
@@ -610,6 +508,8 @@ namespace HienaDev.DevTools
             selStart = Mathf.Clamp(selStart, 0f, Length);
             selEnd = Mathf.Clamp(selEnd, selStart, Length);
             previewDirty = true;
+            cleanAt = EditorApplication.timeSinceStartup;
+            SourceChanged();
             if (source && source.isPlaying) Restart();
             Repaint();
         }
@@ -619,26 +519,28 @@ namespace HienaDev.DevTools
             Stop();
             selStart = 0f; selEnd = Length;
             fadeIn = fadeOut = gainDb = pitch = loopFade = 0f;
-            normalize = false;
+            ClearFx();
+            cleanOn = hearRemoved = false; rumble = gaps = 0f;
+            SourceChanged();
             regions.Clear();
             activeRegion = -1;
             cursor = 0f;
             previewDirty = true;
         }
 
-        float Speed => Mathf.Pow(2f, pitch / 12f);
+        float Speed => apart ? 1f / Mathf.Clamp(stretch, 0.1f, 10f) : Mathf.Pow(2f, pitch / 12f);
 
         void DrawRuler(Rect r)
         {
             if (Event.current.type != EventType.Repaint) return;
-            EditorGUI.DrawRect(r, new Color(0.16f, 0.16f, 0.16f));
+            EditorGUI.DrawRect(r, new Color(0.1f, 0.105f, 0.125f));
             float span = viewEnd - viewStart;
             float step = NiceStep(span / Mathf.Max(1f, r.width / 70f));
             for (float t = Mathf.Ceil(viewStart / step) * step; t <= viewEnd; t += step)
             {
                 float x = X(t, r);
                 EditorGUI.DrawRect(new Rect(x, r.yMax - 6, 1, 6), new Color(0.6f, 0.6f, 0.6f));
-                GUI.Label(new Rect(x + 2, r.y, 70, r.height), Fmt(t), EditorStyles.miniLabel);
+                if (x + 58 < r.xMax) GUI.Label(new Rect(x + 2, r.y, 70, r.height), Fmt(t), EditorStyles.miniLabel);
             }
         }
 
@@ -652,14 +554,15 @@ namespace HienaDev.DevTools
         void DrawWave(Rect r)
         {
             if (Event.current.type != EventType.Repaint) return; // only draw once per frame, never in the layout pass
-            EditorGUI.DrawRect(r, new Color(0.1f, 0.1f, 0.12f));
+            EditorGUI.DrawRect(r, new Color(0.07f, 0.075f, 0.09f));
             // selection
             float sx = X(selStart, r), ex = X(selEnd, r);
             EditorGUI.DrawRect(new Rect(sx, r.y, ex - sx, r.height), new Color(0.3f, 0.55f, 0.95f, 0.18f));
             DrawPeaks(r);
-            // fades
-            if (fadeIn > 0f) EditorGUI.DrawRect(new Rect(sx, r.y, X(selStart + fadeIn, r) - sx, 3), new Color(1f, 0.8f, 0.3f));
-            if (fadeOut > 0f) { float fx = X(selEnd - fadeOut, r); EditorGUI.DrawRect(new Rect(fx, r.y, ex - fx, 3), new Color(1f, 0.8f, 0.3f)); }
+            // what won't be kept, dimmed
+            if (sx > r.x) EditorGUI.DrawRect(new Rect(r.x, r.y, Mathf.Min(sx, r.xMax) - r.x, r.height), new Color(0.07f, 0.075f, 0.09f, 0.62f));
+            if (ex < r.xMax) { float dx = Mathf.Max(ex, r.x); EditorGUI.DrawRect(new Rect(dx, r.y, r.xMax - dx, r.height), new Color(0.07f, 0.075f, 0.09f, 0.62f)); }
+            DrawFades(r); DrawVolume(r);
             // handles
             EditorGUI.DrawRect(new Rect(sx - 1, r.y, 3, r.height), new Color(0.4f, 0.75f, 1f));
             EditorGUI.DrawRect(new Rect(ex - 1, r.y, 3, r.height), new Color(0.4f, 0.75f, 1f));
@@ -704,11 +607,12 @@ namespace HienaDev.DevTools
             GL.Begin(GL.LINES);
             GL.Color(new Color(0.27f, 0.27f, 0.31f));
             GL.Vertex3(r.x, mid, 0); GL.Vertex3(r.xMax, mid, 0);
-            GL.Color(new Color(0.47f, 0.86f, 0.55f));
+            GL.Color(cleanOn && hearRemoved ? new Color(0.95f, 0.5f, 0.4f) : new Color(1f, 0.72f, 0.38f));
             for (int x = 0; x < w; x++)
             {
                 float gx = r.x + (x + 0.5f) / ppp;
-                float top = mid - colHi[x] * half, bottom = mid - colLo[x] * half;
+                float vt = viewStart + (x + 0.5f) / w * (viewEnd - viewStart), k = FadeAt(vt) * (volPts.Count > 0 ? VolAt(vt) : 1f); // (drawn as it'll sound)
+                float top = Mathf.Max(r.y, mid - colHi[x] * half * k), bottom = Mathf.Min(r.yMax, mid - colLo[x] * half * k);
                 if (bottom - top < 1f) bottom = top + 1f;
                 GL.Vertex3(gx, top, 0); GL.Vertex3(gx, bottom, 0);
             }
@@ -716,86 +620,48 @@ namespace HienaDev.DevTools
             GL.PopMatrix();
         }
 
-        float X(float t, Rect r) => r.x + (t - viewStart) / Mathf.Max(1e-5f, viewEnd - viewStart) * r.width;
-        float T(float x, Rect r) => Mathf.Clamp(viewStart + (x - r.x) / Mathf.Max(1f, r.width) * (viewEnd - viewStart), 0f, Length);
+        static readonly Color FadeTint = new Color(1f, 0.85f, 0.35f);
+        Rect FadeInHandle(Rect r) => new Rect(X(selStart + fadeIn, r) - 6, r.y, 12, 12);
+        Rect FadeOutHandle(Rect r) => new Rect(X(selEnd - fadeOut, r) - 6, r.y, 12, 12);
 
-        void HandleMouse(Rect waveRect, Rect ruler, Rect strip)
+        /// <summary>The fades as curves over the wave, with a square at the end of each to drag.</summary>
+        void DrawFades(Rect r)
         {
-            var e = Event.current;
-            var all = new Rect(ruler.x, ruler.y, ruler.width, waveRect.yMax - ruler.y);
-            switch (e.type)
+            if (LoopOn || selEnd - selStart < 0.01f) return;
+            lineMat.SetPass(0); GL.PushMatrix();
+            for (int side = 0; side < 2; side++)
             {
-                case EventType.ScrollWheel when all.Contains(e.mousePosition):
+                float len = side == 0 ? fadeIn : fadeOut; if (len <= 0f) continue;
+                float x0 = X(side == 0 ? selStart : selEnd, r), x1 = X(side == 0 ? selStart + len : selEnd - len, r); const int N = 48;
+                // what's taken away, shaded
+                GL.Begin(GL.QUADS); GL.Color(new Color(FadeTint.r, FadeTint.g, FadeTint.b, 0.13f));
+                for (int i = 0; i < N; i++)
                 {
-                    float at = T(e.mousePosition.x, waveRect);
-                    float k = e.delta.y > 0 ? 1.25f : 0.8f;
-                    viewStart = Mathf.Clamp(at - (at - viewStart) * k, 0f, Length);
-                    viewEnd = Mathf.Clamp(at + (viewEnd - at) * k, 0f, Length);
-                    if (viewEnd - viewStart < 0.01f) viewEnd = Mathf.Min(Length, viewStart + 0.01f);
-                    e.Use();
-                    break;
+                    float a = i / (float)N, b = (i + 1) / (float)N, xa = Mathf.Clamp(Mathf.Lerp(x0, x1, a), r.x, r.xMax), xb = Mathf.Clamp(Mathf.Lerp(x0, x1, b), r.x, r.xMax), ya = Mathf.Lerp(r.yMax, r.y, Shaped(a)), yb = Mathf.Lerp(r.yMax, r.y, Shaped(b));
+                    GL.Vertex3(xa, r.y, 0); GL.Vertex3(xb, r.y, 0); GL.Vertex3(xb, yb, 0); GL.Vertex3(xa, ya, 0);
                 }
-                case EventType.MouseDown when all.Contains(e.mousePosition):
+                GL.End();
+                GL.Begin(GL.QUADS); GL.Color(FadeTint);
+                for (int i = 0; i < N; i++)
                 {
-                    GUIUtility.keyboardControl = 0; // so Space and A work again after typing in a box
-                    float t = T(e.mousePosition.x, waveRect);
-                    if (e.button == 2 || e.alt) { drag = Drag.Pan; dragAnchor = t; }
-                    else if (strip.Contains(e.mousePosition))
-                    {
-                        int hit = regions.FindIndex(rg => t >= rg.start && t <= rg.end);
-                        if (hit >= 0) SelectRegion(hit, e.clickCount > 1);
-                        e.Use();
-                        break;
-                    }
-                    else if (ruler.Contains(e.mousePosition)) { drag = Drag.Seek; Seek(t); }
-                    else if (Mathf.Abs(e.mousePosition.x - X(selStart, waveRect)) < 6) drag = Drag.Start;
-                    else if (Mathf.Abs(e.mousePosition.x - X(selEnd, waveRect)) < 6) drag = Drag.End;
-                    else { drag = Drag.Make; dragAnchor = t; selStart = selEnd = t; activeRegion = -1; }
-                    e.Use();
-                    break;
+                    float a = i / (float)N, b = (i + 1) / (float)N, xa = Mathf.Lerp(x0, x1, a), xb = Mathf.Lerp(x0, x1, b), ya = Mathf.Lerp(r.yMax, r.y, Shaped(a)), yb = Mathf.Lerp(r.yMax, r.y, Shaped(b));
+                    if (xa < r.x - 1 || xb < r.x - 1 || xa > r.xMax + 1 || xb > r.xMax + 1) continue;
+                    var d = new Vector2(xb - xa, yb - ya).normalized; float nx = -d.y * 1.1f, ny = d.x * 1.1f;
+                    GL.Vertex3(xa - nx, ya - ny, 0); GL.Vertex3(xb - nx, yb - ny, 0); GL.Vertex3(xb + nx, yb + ny, 0); GL.Vertex3(xa + nx, ya + ny, 0);
                 }
-                case EventType.MouseDrag when drag != Drag.None:
-                {
-                    float t = T(e.mousePosition.x, waveRect);
-                    switch (drag)
-                    {
-                        case Drag.Start: selStart = Mathf.Min(t, selEnd - 0.005f); break;
-                        case Drag.End: selEnd = Mathf.Max(t, selStart + 0.005f); break;
-                        case Drag.Make: selStart = Mathf.Min(dragAnchor, t); selEnd = Mathf.Max(dragAnchor, t); break;
-                        case Drag.Seek: Seek(t); break;
-                        case Drag.Pan:
-                        {
-                            float shift = dragAnchor - t, span = viewEnd - viewStart;
-                            viewStart = Mathf.Clamp(viewStart + shift, 0f, Length - span);
-                            viewEnd = viewStart + span;
-                            break;
-                        }
-                    }
-                    previewDirty = true;
-                    e.Use();
-                    break;
-                }
-                case EventType.MouseUp when drag != Drag.None:
-                {
-                    if (drag == Drag.Make && selEnd - selStart < 0.005f)
-                    {
-                        // just a click: keep everything selected and move the playhead there
-                        float at = selStart;
-                        selStart = 0f; selEnd = Length;
-                        previewDirty = true;
-                        Seek(at);
-                    }
-                    else if (drag != Drag.Seek && drag != Drag.Pan)
-                    {
-                        cursor = selStart;
-                        if (source && source.isPlaying) { Stop(); Play(selStart); }
-                    }
-                    drag = Drag.None;
-                    e.Use();
-                    break;
-                }
+                GL.End();
+            }
+            GL.PopMatrix();
+            foreach (var h in new[] { FadeInHandle(r), FadeOutHandle(r) })
+            {
+                if (h.center.x < r.x - 1 || h.center.x > r.xMax + 1) continue;
+                EditorGUI.DrawRect(h, new Color(0, 0, 0, 0.6f)); EditorGUI.DrawRect(new Rect(h.x + 1.5f, h.y + 1.5f, h.width - 3, h.height - 3), FadeTint);
+                EditorGUIUtility.AddCursorRect(new Rect(h.x - 2, h.y, h.width + 4, h.height + 3), MouseCursor.SlideArrow);
             }
         }
+
+        float X(float t, Rect r) => r.x + (t - viewStart) / Mathf.Max(1e-5f, viewEnd - viewStart) * r.width;
+        float T(float x, Rect r) => Mathf.Clamp(viewStart + (x - r.x) / Mathf.Max(1f, r.width) * (viewEnd - viewStart), 0f, Length);
 
         void HandleKeys()
         {
@@ -804,6 +670,8 @@ namespace HienaDev.DevTools
             if (GUIUtility.keyboardControl != 0) return; // typing in a box
             if (e.keyCode == KeyCode.Space) { TogglePlay(); e.Use(); }
             else if (e.keyCode == KeyCode.A) { Undo.RecordObject(this, "Audio Trimmer"); AddRegion(); e.Use(); }
+            else if (e.keyCode == KeyCode.H) { hand = hand == Hand.Select ? Hand.Move : Hand.Select; e.Use(); }
+            else if (e.keyCode == KeyCode.Escape) { Undo.RecordObject(this, "Audio Trimmer"); SelectAll(); e.Use(); }
             else if (e.keyCode == KeyCode.Home) { Stop(); cursor = selStart; e.Use(); }
             else if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter) { Stop(); playSelectionOnly = true; cursor = selStart; TogglePlay(); e.Use(); }
         }
@@ -812,8 +680,8 @@ namespace HienaDev.DevTools
 
         float Playhead()
         {
-            if (source && (source.isPlaying || paused) && source.clip)
-                return playFrom + (loopFade > 0f && playSelectionOnly ? loopFade : 0f) + source.time * Speed;
+            if (varTimes == null && source && (source.isPlaying || paused) && source.clip)
+                return playFrom + (LoopOn && playSelectionOnly ? loopFade : 0f) + source.time * Speed;
             return cursor;
         }
 
@@ -833,11 +701,11 @@ namespace HienaDev.DevTools
             Play(cursor);
         }
 
-        void Restart() { float at = Playhead(); Stop(); Play(at); }
+        void Restart() { if (varTimes != null || mixOn || makeOn) return; float at = Playhead(); Stop(); Play(at); }
 
         void Play(float at)
         {
-            paused = false;
+            paused = false; varTimes = null;
             float from = playSelectionOnly ? selStart : 0f, to = playSelectionOnly ? selEnd : Length;
             if (at < from || at >= to - 0.01f) at = from;
             if (previewDirty || !previewClip) BuildPreview(from, to);
@@ -851,7 +719,7 @@ namespace HienaDev.DevTools
             source.clip = previewClip;
             source.loop = loop;
             playFrom = from;
-            source.time = Mathf.Clamp((at - from - (loopFade > 0f && playSelectionOnly ? loopFade : 0f)) / Speed, 0f, Mathf.Max(0f, previewClip.length - 0.001f));
+            source.time = Mathf.Clamp((at - from - (LoopOn && playSelectionOnly ? loopFade : 0f)) / Speed, 0f, Mathf.Max(0f, previewClip.length - 0.001f));
             source.Play();
             playing = true;
         }
@@ -860,17 +728,24 @@ namespace HienaDev.DevTools
         {
             paused = false;
             playing = false;
+            varTimes = null; mixOn = makeOn = false;
             if (source) source.Stop();
         }
 
         void Tick()
         {
+            MicTick(); LoopTick(); LayerTick();
+            if (page == Page.Layers) { MixTick(); return; }
+            if (page == Page.Check) CheckTick();
+            if (page == Page.Make || page == Page.Record || page == Page.Ambience || page == Page.Check || page == Page.Stems) { MakeTick(); return; }
+            CleanTick();
             if (restartAt > 0 && EditorApplication.timeSinceStartup >= restartAt && GUIUtility.hotControl == 0)
             {
                 restartAt = -1;
                 if (source && source.isPlaying) Restart();
             }
-            if (source && source.isPlaying)
+            if (source && source.isPlaying && varTimes != null) { int now = VarNow; if (now != lastVar) { lastVar = now; Repaint(); } }
+            else if (source && source.isPlaying)
             {
                 // the playhead only needs a redraw when it has moved a pixel or so
                 float now = Playhead();
@@ -880,7 +755,7 @@ namespace HienaDev.DevTools
             {
                 // reached the end
                 playing = false;
-                cursor = playSelectionOnly ? selStart : 0f;
+                cursor = playSelectionOnly || varTimes != null ? selStart : 0f; varTimes = null;
                 Repaint();
             }
         }
@@ -888,48 +763,70 @@ namespace HienaDev.DevTools
         void BuildPreview(float from, float to)
         {
             var data = Render(from, to, playSelectionOnly);
+            Make(data);
+            previewDirty = false;
+        }
+
+        void Make(float[] data) => Make(data, channels, rate);
+        void Make(float[] data, int channels, int rate)
+        {
             if (previewClip) DestroyImmediate(previewClip);
             int n = data.Length / channels;
             previewClip = AudioClip.Create("Trim Preview", Mathf.Max(1, n), channels, rate, false);
             previewClip.hideFlags = HideFlags.HideAndDontSave;
             previewClip.SetData(data, 0);
-            previewDirty = false;
+            if (!player)
+            {
+                player = EditorUtility.CreateGameObjectWithHideFlags("Audio Trimmer Preview", HideFlags.HideAndDontSave, typeof(AudioSource));
+                source = player.GetComponent<AudioSource>(); source.playOnAwake = false; source.spatialBlend = 0f;
+            }
+            source.clip = previewClip;
         }
+        float levelNow = float.NaN, levelShort;
 
-        /// <summary>The samples from <paramref name="from"/> to <paramref name="to"/>, with the volume and (optionally) the fades.</summary>
-        float[] Render(float from, float to, bool withFades)
+        /// <summary>The samples from <paramref name="from"/> to <paramref name="to"/>, with everything done to them.</summary>
+        float[] Render(float from, float to, bool withFades, Vary vary = default)
         {
+            from = Mathf.Min(from + vary.skip, Mathf.Max(from, to - 0.01f));
             int f0 = Mathf.Clamp(Mathf.RoundToInt(from * rate), 0, frames), f1 = Mathf.Clamp(Mathf.RoundToInt(to * rate), f0 + 1, frames);
             int n = f1 - f0;
             var outp = new float[n * channels];
-            Array.Copy(samples, f0 * channels, outp, 0, outp.Length);
-            float gain = Mathf.Pow(10f, gainDb / 20f);
-            if (normalize)
-            {
-                float peak = 0f;
-                foreach (var v in outp) peak = Mathf.Max(peak, Mathf.Abs(v));
-                if (peak > 1e-5f) gain *= 0.98f / peak;
-            }
-            bool looping = loopFade > 0f && withFades;
-            if (looping) withFades = false;
-            int fi = Mathf.RoundToInt(fadeIn * rate), fo = Mathf.RoundToInt(fadeOut * rate);
-            for (int f = 0; f < n; f++)
-            {
-                float k = gain;
-                if (withFades)
-                {
-                    if (fi > 0 && f < fi) k *= f / (float)fi;
-                    if (fo > 0 && f > n - fo) k *= (n - f) / (float)fo;
-                }
-                for (int c = 0; c < channels; c++)
-                {
-                    int i = f * channels + c;
-                    outp[i] = Mathf.Clamp(outp[i] * k, -1f, 1f);
-                }
-            }
+            Array.Copy(Src, f0 * channels, outp, 0, outp.Length);
+            bool looping = LoopOn && withFades, all = withFades; // (the whole sound, played for orientation, keeps its length)
+            var fx = FxNow(from); if (looping || !withFades) fx.fadeIn = fx.fadeOut = 0f;
+            // (a start that's been skipped gets the tiniest fade, so it can't click)
+            if (vary.skip > 0f) fx.fadeIn = Mathf.Max(fx.fadeIn, Mathf.Min(1 / 400f, n / 4f / rate));
+            fx.Shape(outp, channels, rate); float gain = levelMode == 0 ? Mathf.Pow(10f, gainDb / 20f) : 1f; if (gain != 1f) for (int i = 0; i < outp.Length; i++) outp[i] *= gain;
             if (looping) outp = MakeLoop(outp, Mathf.RoundToInt(loopFade * rate));
-            if (Mathf.Abs(pitch) > 0.001f) outp = Resample(outp, Speed);
+            outp = fx.Run(outp, channels, rate, looping, vary.pitch, all);
+            float roomBefore = vary.isOne ? -20f * Mathf.Log10(Mathf.Max(1e-5f, AudioFx.PeakOf(outp)) / 0.98f) : 0f;
+            // a variation's tone: duller or brighter, the whole range leans (and as loud as before: volume has its own slider)
+            if (Mathf.Abs(vary.tilt) > 0.05f)
+            {
+                float was = AudioFx.Loudness(outp, channels, rate); AudioFx.Tone(outp, channels, rate, new AudioFx.ToneSettings { bass = -vary.tilt * 0.6f, treble = vary.tilt });
+                float now = AudioFx.Loudness(outp, channels, rate); if (was > -90 && now > -90) { float k = Mathf.Pow(10f, (was - now) / 20f); for (int i = 0; i < outp.Length; i++) outp[i] *= k; }
+            }
+            levelShort = fx.Level(outp, channels, rate);
+            // (a loud sound has no room for louder variations: then they're all moved down together, so they keep their differences)
+            if (vary.isOne) { float room = -20f * Mathf.Log10(Mathf.Max(1e-5f, AudioFx.PeakOf(outp)) / 0.98f), down = levelMode == 0 ? Mathf.Max(0f, varVolume + varTone * 0.4f - roomBefore) : Mathf.Max(0f, varVolume - room), k = Mathf.Pow(10f, (vary.gain - down) / 20f); for (int i = 0; i < outp.Length; i++) outp[i] *= k; }
+            if (vary.isOne) AudioFx.Limit(outp);
+            for (int i = 0; i < outp.Length; i++) outp[i] = Mathf.Clamp(outp[i], -1f, 1f);
+            levelNow = AudioFx.Loudness(outp, channels, rate);
             return outp;
+        }
+
+        bool LoopOn => loopFade > 0.004f;
+        AudioFx.ToneSettings ToneNow => new AudioFx.ToneSettings { bass = bass, mid = middle, treble = treble, muffle = muffle, thin = thin, grit = grit };
+        /// <summary>How loud it is part of the way through a fade (0..1).</summary>
+        float Shaped(float k) => SoundFx.Shaped(k, fadeShape);
+        /// <summary>What the fades do at a time in the sound.</summary>
+        float FadeAt(float time)
+        {
+            if (LoopOn || time < selStart || time > selEnd) return 1f;
+            float k = 1f;
+            if (fadeIn > 0f && time < selStart + fadeIn) k *= Shaped((time - selStart) / fadeIn);
+            if (fadeOut > 0f && time > selEnd - fadeOut) k *= Shaped((selEnd - time) / fadeOut);
+            return k;
         }
 
         /// <summary>
@@ -962,23 +859,6 @@ namespace HienaDev.DevTools
             return outp;
         }
 
-        /// <summary>Plays the sound faster or slower (pitch and length change together).</summary>
-        float[] Resample(float[] a, float speed)
-        {
-            int n = a.Length / channels;
-            int m = Mathf.Max(1, Mathf.RoundToInt(n / speed));
-            var outp = new float[m * channels];
-            for (int f = 0; f < m; f++)
-            {
-                double pos = f * (double)speed;
-                int i0 = Mathf.Min(n - 1, (int)pos), i1 = Mathf.Min(n - 1, i0 + 1);
-                float t = (float)(pos - i0);
-                for (int c = 0; c < channels; c++)
-                    outp[f * channels + c] = Mathf.Lerp(a[i0 * channels + c], a[i1 * channels + c], t);
-            }
-            return outp;
-        }
-
         // ------------------------------------------------------------------ saving
 
         void Save(bool overwrite)
@@ -998,6 +878,7 @@ namespace HienaDev.DevTools
                     if (pick == 2) target = AssetDatabase.GenerateUniqueAssetPath(target);
                 }
             }
+            FinishCleaning();
             var data = Render(selStart, selEnd, true);
             File.WriteAllBytes(target, WriteWav(data, channels, rate));
             Stop();
@@ -1008,14 +889,19 @@ namespace HienaDev.DevTools
         }
 
         /// <summary>Gives the open sound the name in the Name box (keeps its references, it's the same asset).</summary>
-        void Rename()
+        void RenameTo(string wanted)
         {
             string path = AssetDatabase.GetAssetPath(clip);
-            string name = CleanName(saveName);
-            if (string.IsNullOrEmpty(name)) return;
+            string was = Path.GetFileNameWithoutExtension(path), name = CleanName(wanted);
+            if (string.IsNullOrEmpty(name) || name == was) return;
             string error = AssetDatabase.RenameAsset(path, name);
             if (!string.IsNullOrEmpty(error)) { EditorUtility.DisplayDialog("Can't rename", error, "OK"); return; }
             Debug.Log($"[Audio Trimmer] Renamed {Path.GetFileName(path)} to {name}{Path.GetExtension(path)}.", clip);
+            openName = name;
+            // the names made from the old one follow
+            if (saveName.StartsWith(was)) saveName = name + saveName.Substring(was.Length);
+            if (nameAll == was) nameAll = name;
+            foreach (var r in regions) if (r.name.StartsWith(was)) r.name = name + r.name.Substring(was.Length);
             EditorGUIUtility.PingObject(clip);
         }
 
@@ -1044,7 +930,7 @@ namespace HienaDev.DevTools
 
         // ------------------------------------------------------------------ wav files
 
-        static bool ReadWav(byte[] b, out float[] data, out int channels, out int rate)
+        internal static bool ReadWav(byte[] b, out float[] data, out int channels, out int rate)
         {
             data = null; channels = 1; rate = 44100;
             if (b.Length < 44 || b[0] != 'R' || b[1] != 'I' || b[2] != 'F' || b[3] != 'F') return false;

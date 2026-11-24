@@ -10,7 +10,8 @@
     "autoReferenced": true,
     "defineConstraints": [],
     "versionDefines": [
-        { "name": "com.unity.ugui", "expression": "1.0.0", "define": "HIENADEV_UGUI" }
+        { "name": "com.unity.ugui", "expression": "1.0.0", "define": "HIENADEV_UGUI" },
+        { "name": "com.unity.modules.terrainphysics", "expression": "1.0.0", "define": "HIENADEV_TERRAIN" }
     ],
     "noEngineReferences": false
 }
