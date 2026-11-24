@@ -16,7 +16,7 @@ namespace HienaDev.DevTools
     /// </summary>
     public partial class TextureStudioWindow : EditorWindow
     {
-        enum Page { Edit, Shrink, Pack, Library, Decals, Patterns, Paint }
+        enum Page { Edit, Shrink, Pack, Library, Decals, Patterns, Paint, Atlas }
         enum View { Compare, After, Before, Normal, Height, Mask, SideBySide, Model, Glow }
 
         [SerializeField] Page m_Page = Page.Edit;
@@ -414,7 +414,7 @@ namespace HienaDev.DevTools
             {
                 GUILayout.BeginArea(new Rect(body.x + 10, body.y + 6, body.width - 20, body.height - 10));
                 m_PageScroll = GUILayout.BeginScrollView(m_PageScroll);
-                if (m_Page == Page.Shrink) ShrinkGUI(); else if (m_Page == Page.Pack) PackGUI(); else LibraryGUI();
+                if (m_Page == Page.Shrink) ShrinkGUI(); else if (m_Page == Page.Pack) PackGUI(); else if (m_Page == Page.Atlas) AtlasGUI(); else LibraryGUI();
                 GUILayout.EndScrollView();
                 GUILayout.EndArea();
             }
@@ -435,6 +435,7 @@ namespace HienaDev.DevTools
             if (Pill("Decals", m_Page == Page.Decals, "Make blood, posters and bullet holes, and stick them on things in the scene")) m_Page = Page.Decals;
             if (Pill("Library", m_Page == Page.Library, "Everything made with Texture Studio in this project")) { m_Page = Page.Library; m_Lib = null; }
             if (Pill("Make a mask map", m_Page == Page.Pack, "Join greyscale maps (metallic, AO, smoothness) into one texture")) m_Page = Page.Pack;
+            if (Pill("Atlas", m_Page == Page.Atlas, "Many materials into one texture and one material (fewer draw calls, PS1 texture pages)")) m_Page = Page.Atlas;
             GUILayout.FlexibleSpace();
             if (m_Page == Page.Edit)
             {

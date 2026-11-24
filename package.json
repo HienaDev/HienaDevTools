@@ -1,8 +1,8 @@
 {
   "name": "com.hienadev.devtools",
-  "version": "1.31.0",
+  "version": "1.33.0",
   "displayName": "HienaDev Dev Tools",
-  "description": "Editor tools for every project: Build All (Windows + Web builds in one click, zipped, with a build report and itch.io publishing), Perf Doctor (a plain-language profiler), Audio Trimmer (cut, fade and loop sounds), Game view screenshots and an Itch Page Kit (cover, screenshots, banner, GIF maker) a Web Size Tester, a Play toolbar, scene switcher, jam timer, Hierarchy notes/TODO and icons, folder colours, Find References, Bulk Rename, a Changelog, Missing Scripts, selection history and Favourites.",
+  "description": "Editor tools for every project: Build All (Windows + Web builds in one click, zipped, with a build report and itch.io publishing), Perf Doctor (a plain-language profiler), Audio Trimmer (cut, fade and loop sounds), Game view screenshots and an Itch Page Kit (cover, screenshots, banner, GIF maker) a Web Size Tester, a Play toolbar, scene switcher, jam timer, Hierarchy notes/TODO and icons, folder colours, Find References, Bulk Rename, a Changelog, Missing Scripts, selection history and Favourites, and Mesh Kit (decimate, LODs, pivot/size/turn, normals, clean up, mirror, UVs, join/split, colliders, OBJ/FBX export, PSX triangle budget and light baked into vertex colours).",
   "unity": "6000.0",
   "author": {
     "name": "HienaDev"
@@ -24,7 +24,7 @@
     },
     {
       "displayName": "Texture Studio",
-      "description": "Make textures without a paint program: layered steps (noise, patterns, bricks, stickers, text, decals, wear, glow, pixel art), seamless tiling that never repeats, materials and a painter for the Scene view. Tools > Texture Studio once imported.",
+      "description": "Make textures without a paint program: layered steps (noise, patterns, bricks, stickers, text, decals, wear, glow, pixel art), seamless tiling that never repeats, materials, an atlas maker (many materials into one) and a painter for the Scene view. Tools > Texture Studio once imported.",
       "path": "Samples~/Texture Studio"
     },
     {
