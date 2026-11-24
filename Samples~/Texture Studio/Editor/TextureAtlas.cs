@@ -163,7 +163,7 @@ namespace HienaDev.DevTools
         public static Made Make(IList<Material> mats, IList<Renderer> users, Options o)
         {
             var plan = Lay(mats, users, o); if (plan.entries.Count == 0) return null;
-            string folder = MeshDecimateActions.Folder(o.folder.TrimEnd('/') + "/" + Safe(o.name));
+            string folder = MakeFolder(o.folder.TrimEnd('/') + "/" + Safe(o.name));
             var made = new Made { plan = plan };
             var like = plan.entries.Select(e => e.colour).FirstOrDefault(t => t);
             try
@@ -191,6 +191,22 @@ namespace HienaDev.DevTools
             }
             finally { EditorUtility.ClearProgressBar(); }
             return made;
+        }
+
+        static string MakeFolder(string folder)
+        {
+            folder = folder.Replace('\\', '/').TrimEnd('/'); if (!folder.StartsWith("Assets")) folder = "Assets/" + folder;
+            var parts = folder.Split('/'); string at = parts[0];
+            for (int i = 1; i < parts.Length; i++) { string next = at + "/" + parts[i]; if (!AssetDatabase.IsValidFolder(next)) AssetDatabase.CreateFolder(at, parts[i]); at = next; }
+            return folder;
+        }
+
+        /// <summary>Saves a mesh asset; one saved before at the same place is updated, so what uses it keeps working.</summary>
+        static Mesh SaveMesh(string name, MeshSnapshot s, string folder)
+        {
+            string path = folder + "/" + name + ".asset"; var old = AssetDatabase.LoadAssetAtPath<Mesh>(path);
+            if (old) { s.ToMesh(old); old.name = name; EditorUtility.SetDirty(old); return old; }
+            var m = s.ToMesh(); m.name = name; AssetDatabase.CreateAsset(m, path); return m;
         }
 
         static string Safe(string n) { foreach (var c in Path.GetInvalidFileNameChars()) n = n.Replace(c, '_'); return string.IsNullOrWhiteSpace(n) ? "Atlas" : n.Trim(); }
@@ -239,7 +255,7 @@ namespace HienaDev.DevTools
                     o.idx.Insert(0, atlasIdx); o.topo.Insert(0, MeshTopology.Triangles); keptMats.Insert(0, atlas);
                     // one mesh asset per mesh + materials (a shared mesh with other materials gets other UVs)
                     string mats = string.Join("+", rm.Where(m => m && byMat.ContainsKey(m)).Select(m => m.name).Distinct()); if (mats.Length > 40) mats = mats.Substring(0, 40);
-                    var saved = MeshDecimateActions.Save(mesh.name, o.ToSnapshot(), folder, " atlas " + mats);
+                    var saved = SaveMesh(Safe(mesh.name + " atlas " + mats), o.ToSnapshot(), folder);
                     res = (saved, keptMats.ToArray()); cache[key] = res; made.meshes++;
                 }
                 if (sk) { Undo.RecordObject(sk, "Atlas"); sk.sharedMesh = res.mesh; } else { Undo.RecordObject(mf, "Atlas"); mf.sharedMesh = res.mesh; }

@@ -1,8 +1,8 @@
 {
   "name": "com.hienadev.devtools",
-  "version": "1.33.0",
+  "version": "1.34.0",
   "displayName": "HienaDev Dev Tools",
-  "description": "Editor tools for every project: Build All (Windows + Web builds in one click, zipped, with a build report and itch.io publishing), Perf Doctor (a plain-language profiler), Audio Trimmer (cut, fade and loop sounds), Game view screenshots and an Itch Page Kit (cover, screenshots, banner, GIF maker) a Web Size Tester, a Play toolbar, scene switcher, jam timer, Hierarchy notes/TODO and icons, folder colours, Find References, Bulk Rename, a Changelog, Missing Scripts, selection history and Favourites, and Mesh Kit (decimate, LODs, pivot/size/turn, normals, clean up, mirror, UVs, join/split, colliders, OBJ/FBX export, PSX triangle budget and light baked into vertex colours).",
+  "description": "Editor tools for every project: Build All (Windows + Web builds in one click, zipped, with a build report and itch.io publishing), Perf Doctor (a plain-language profiler), Audio Trimmer (cut, fade and loop sounds), Game view screenshots and an Itch Page Kit (cover, screenshots, banner, GIF maker) a Web Size Tester, a Play toolbar, scene switcher, jam timer, Hierarchy notes/TODO and icons, folder colours, Find References, Bulk Rename, a Changelog, Missing Scripts, selection history and Favourites.",
   "unity": "6000.0",
   "author": {
     "name": "HienaDev"
@@ -31,6 +31,11 @@
       "displayName": "Building Builder",
       "description": "Build houses floor by floor in their own window: rooms of any shape, walls, doors, windows, stairs, railings, roofs and attics, your own models, walk mode, PSX look, prefabs, floor plans and NavMesh. Tools > Building Builder once imported. It uses Texture Studio, which is imported with it.",
       "path": "Samples~/Building Builder"
+    },
+    {
+      "displayName": "Mesh Kit",
+      "description": "Fix models without Blender: decimate (like Blender's Decimate) and LODs, pivot, size and turning, normals, clean up, mirror, UVs, join and split, colliders, OBJ/FBX export, and PSX tools (triangle budget, light baked into vertex colours). Tools > Mesh Kit once imported.",
+      "path": "Samples~/Mesh Kit"
     }
   ]
 }

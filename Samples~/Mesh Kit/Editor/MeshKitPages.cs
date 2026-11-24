@@ -14,7 +14,64 @@ namespace HienaDev.DevTools
         public enum Page { Decimate, Fix, Shape, UVs, Objects, PSX }
         [SerializeField] public Page page;
         [SerializeField] bool onlyShown;
-        [SerializeField] int pivotAt;
+        [SerializeField] Vector3 pivotShare = new Vector3(0.5f, 0, 0.5f);
+        static string Pc(float f) => Mathf.RoundToInt(f * 100) + "%";
+        static bool Outside(Vector3 f) => f.x < -0.001f || f.y < -0.001f || f.z < -0.001f || f.x > 1.001f || f.y > 1.001f || f.z > 1.001f;
+        float Share(string label, float v)
+        {
+            GUILayout.BeginHorizontal(); GUILayout.Label(label, sHint, GUILayout.Width(74));
+            v = Mathf.Round(GUILayout.HorizontalSlider(v, 0, 1) * 20) / 20f; GUILayout.Label(Pc(v), sHint, GUILayout.Width(34)); GUILayout.EndHorizontal(); return v;
+        }
+        /// <summary>Where the shown mesh's pivot is now, as shares of its box.</summary>
+        Vector3? PivotNow()
+        {
+            var m = Current; if (!m) return null; var b = m.bounds; var s = b.size;
+            return new Vector3(s.x > 0 ? -b.min.x / s.x : 0.5f, s.y > 0 ? -b.min.y / s.y : 0.5f, s.z > 0 ? -b.min.z / s.z : 0.5f);
+        }
+
+        /// <summary>The pivot now (white, with its axes) and where it will go (orange), over the preview.</summary>
+        void DrawPivot(Rect r, Mesh mesh, Camera cam)
+        {
+            var b = mesh.bounds; var target = b.min + Vector3.Scale(b.size, pivotShare); float len = b.extents.magnitude * 0.35f;
+            Vector2 G(Vector3 p) { var v = cam.WorldToViewportPoint(p); return new Vector2(r.x + v.x * r.width, r.y + (1 - v.y) * r.height); }
+            Handles.BeginGUI();
+            var c = new Vector3[8]; for (int i = 0; i < 8; i++) c[i] = new Vector3((i & 1) == 0 ? b.min.x : b.max.x, (i & 2) == 0 ? b.min.y : b.max.y, (i & 4) == 0 ? b.min.z : b.max.z);
+            Handles.color = Ink(0.25f); // the model's box, faint
+            foreach (var (i, j) in new[] { (0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7) }) Handles.DrawAAPolyLine(1.5f, G(c[i]), G(c[j]));
+            var o = G(Vector3.zero); // the pivot now, with axes like Unity's move tool
+            Handles.color = new Color(0.95f, 0.3f, 0.25f); Handles.DrawAAPolyLine(3, o, G(Vector3.right * len));
+            Handles.color = new Color(0.45f, 0.85f, 0.3f); Handles.DrawAAPolyLine(3, o, G(Vector3.up * len));
+            Handles.color = new Color(0.3f, 0.55f, 1f); Handles.DrawAAPolyLine(3, o, G(Vector3.forward * len));
+            var t = G(target);
+            if ((t - o).sqrMagnitude > 4) { Handles.color = new Color(Accent.r, Accent.g, Accent.b, 0.7f); Handles.DrawAAPolyLine(2, o, t); }
+            Handles.EndGUI();
+            Dot(o, Color.white, "pivot now"); if ((t - o).sqrMagnitude > 4) Dot(t, Accent, "new pivot");
+        }
+        void Dot(Vector2 p, Color c, string label)
+        {
+            EditorGUI.DrawRect(new Rect(p.x - 6, p.y - 6, 12, 12), Color.black); EditorGUI.DrawRect(new Rect(p.x - 4, p.y - 4, 8, 8), c);
+            var st = new GUIStyle(sHead) { normal = { textColor = c } }; float w = st.CalcSize(new GUIContent(label)).x + 8;
+            EditorGUI.DrawRect(new Rect(p.x + 8, p.y - 9, w, 18), new Color(0, 0, 0, 0.65f)); GUI.Label(new Rect(p.x + 12, p.y - 8, w, 16), label, st);
+        }
+
+        /// <summary>The same in the Scene view, on the objects on the list.</summary>
+        void OnScene(SceneView sv)
+        {
+            if (page != Page.Fix || items.Count == 0) return;
+            foreach (var src in sources)
+            {
+                if (!(src is GameObject go) || !MeshDecimateActions.IsSceneObject(go)) continue;
+                foreach (var mf in go.GetComponentsInChildren<MeshFilter>(false))
+                {
+                    if (!mf.sharedMesh || (onlyShown && mf.sharedMesh != Current)) continue;
+                    var b = mf.sharedMesh.bounds; var now = mf.transform.position; var to = mf.transform.TransformPoint(b.min + Vector3.Scale(b.size, pivotShare));
+                    float s = HandleUtility.GetHandleSize(now) * 0.12f;
+                    Handles.color = Color.white; Handles.SphereHandleCap(0, now, Quaternion.identity, s, EventType.Repaint);
+                    Handles.color = Accent; Handles.SphereHandleCap(0, to, Quaternion.identity, s, EventType.Repaint); Handles.DrawDottedLine(now, to, 3);
+                    Handles.Label(now, " pivot now"); Handles.Label(to, " new pivot");
+                }
+            }
+        }
         [SerializeField] float height = 1.8f, smoothAngle = 40f, weldDist = 0.001f, smallShare = 0.02f, maxEdge = 1f, boxTile = 1f;
         [SerializeField] Vector2 uvScale = Vector2.one; [SerializeField] int snapSize = 128, budget = 500, symAxis; [SerializeField] bool symPlus = true;
         [SerializeField] MeshKitActions.ColliderKind colKind = MeshKitActions.ColliderKind.Convex; [SerializeField] float colShare = 0.2f; [SerializeField] bool colReplace = true;
@@ -56,8 +113,14 @@ namespace HienaDev.DevTools
         {
             GUILayout.BeginVertical(sCard);
             Head("PIVOT");
-            GUILayout.BeginHorizontal(); if (Pill("Bottom", pivotAt == 0)) pivotAt = 0; if (Pill("Middle", pivotAt == 1)) pivotAt = 1; if (Pill("Corner", pivotAt == 2)) pivotAt = 2; GUILayout.EndHorizontal();
-            if (Btn("Move the pivot there", "The model stays where it is in the scene; only its pivot moves")) later.Add(() => Pivot(pivotAt));
+            GUILayout.Label("White: where it is now.  Orange: where it will go. (In the preview and the Scene view.)", sHint);
+            var now = PivotNow();
+            if (now.HasValue) GUILayout.Label("Now: " + Pc(now.Value.x) + " across, " + Pc(now.Value.y) + " up, " + Pc(now.Value.z) + " deep" + (Outside(now.Value) ? " (outside the model)" : ""), sHint);
+            GUILayout.BeginHorizontal();
+            foreach (var (n, f) in new[] { ("Bottom", new Vector3(0.5f, 0, 0.5f)), ("Middle", new Vector3(0.5f, 0.5f, 0.5f)), ("Top", new Vector3(0.5f, 1, 0.5f)), ("Corner", Vector3.zero) }) if (Pill(n, pivotShare == f)) pivotShare = f;
+            GUILayout.EndHorizontal();
+            pivotShare.x = Share("Left – right", pivotShare.x); pivotShare.y = Share("Down – up", pivotShare.y); pivotShare.z = Share("Back – front", pivotShare.z);
+            if (Btn("Move the pivot there", "The model stays where it is in the scene; only its pivot moves")) later.Add(() => Pivot(pivotShare));
             Head("SIZE");
             GUILayout.BeginHorizontal(); GUILayout.Label("Make it", sHint, GUILayout.Width(44)); height = Mathf.Max(0.001f, EditorGUILayout.FloatField(height, GUILayout.Width(56))); GUILayout.Label("m tall", sHint, GUILayout.Width(40));
             if (Btn("Do it", "Scales the mesh so it is this tall in the scene")) later.Add(() => SetHeight(height)); GUILayout.EndHorizontal();
@@ -272,7 +335,7 @@ namespace HienaDev.DevTools
             for (int i = 0; i < sources.Count; i++) if (sources[i] is Mesh m && map.TryGetValue(m, out var n)) sources[i] = n;
         }
 
-        void Pivot(int where)
+        public void Pivot(Vector3 where)
         {
             var spots = new Dictionary<Mesh, Vector3>();
             foreach (var m in Targets()) { var sn = Snap(m); if (sn != null) spots[m] = MeshOps.PivotSpot(sn, where); }

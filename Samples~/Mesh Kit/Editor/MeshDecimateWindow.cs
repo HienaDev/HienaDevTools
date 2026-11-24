@@ -116,11 +116,11 @@ namespace HienaDev.DevTools
         void Say(string s) { status = s; statusUntil = EditorApplication.timeSinceStartup + 5; Repaint(); }
 
         // ---------------------------------------------------------------- background work
-        void OnEnable() { EditorApplication.update += Tick; Undo.undoRedoPerformed += AfterUndo; Rebuild(); }
+        void OnEnable() { EditorApplication.update += Tick; Undo.undoRedoPerformed += AfterUndo; SceneView.duringSceneGui += OnScene; Rebuild(); }
         void AfterUndo() { foreach (var m in items.Select(i => i.mesh).ToList()) if (m) snaps.Remove(m); Rebuild(); }
         void OnDisable()
         {
-            EditorApplication.update -= Tick; Undo.undoRedoPerformed -= AfterUndo; cts?.Cancel();
+            EditorApplication.update -= Tick; Undo.undoRedoPerformed -= AfterUndo; SceneView.duringSceneGui -= OnScene; cts?.Cancel();
             foreach (var d in done.Values) if (d.shown) DestroyImmediate(d.shown);
             foreach (var w in wireOf.Values) if (w) DestroyImmediate(w);
             done.Clear(); wireOf.Clear(); pru?.Cleanup(); pru = null; if (wireMat) DestroyImmediate(wireMat); if (panelTex) DestroyImmediate(panelTex);
@@ -380,6 +380,7 @@ namespace HienaDev.DevTools
                 if (wires) { var wm = Wire(mesh); if (wm) pru.DrawMesh(wm, Matrix4x4.identity, WireMat(), 0); }
                 pru.camera.Render();
                 GUI.DrawTexture(r, pru.EndPreview(), ScaleMode.StretchToFill, false);
+                if (page == Page.Fix) DrawPivot(r, mesh, pru.camera);
             }
             else GUI.Label(r, Busy ? "Working..." : "", sEmpty);
             GUI.Label(new Rect(r.x + 10, r.y + 8, 200, 16), label, sHead);
