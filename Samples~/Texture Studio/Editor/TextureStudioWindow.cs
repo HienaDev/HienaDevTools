@@ -16,7 +16,7 @@ namespace HienaDev.DevTools
     /// </summary>
     public partial class TextureStudioWindow : EditorWindow
     {
-        enum Page { Edit, Shrink, Pack, Library, Decals, Patterns, Paint, Atlas }
+        enum Page { Edit, Shrink, Pack, Library, Decals, Patterns, Paint, Atlas, Moving }
         enum View { Compare, After, Before, Normal, Height, Mask, SideBySide, Model, Glow }
 
         [SerializeField] Page m_Page = Page.Edit;
@@ -30,7 +30,7 @@ namespace HienaDev.DevTools
         [SerializeField] float m_Split = 0.5f;
         [SerializeField] bool m_Edges;
         [SerializeField] bool m_SaveNormal = true, m_SaveHeight, m_SaveMask = true, m_MakeMaterial = true;
-        [SerializeField] float m_NormalStrength = 2f, m_AO = 1f, m_Smooth = 0.4f;
+        [SerializeField] float m_NormalStrength = 2f, m_AO = 1f, m_Smooth = 0.4f; [SerializeField] float m_Metal; [SerializeField] bool m_MetalByColour, m_SaveCurve; [SerializeField] Color m_MetalColour = new Color(0.6f, 0.6f, 0.62f); [SerializeField] float m_MetalRange = 0.25f;
         [SerializeField] int m_ImportAs = -1;
         [SerializeField] string m_SaveName = "";
         [SerializeField] float m_HeightContrast = 1.2f, m_HeightSmooth = 0.6f; [SerializeField] bool m_HeightInvert;
@@ -76,7 +76,11 @@ namespace HienaDev.DevTools
             T("FIX", () => new PaintOutStep()), T("MIX", () => new MixStep()), T("MIX", () => new StickerStep()), T("MIX", () => new GlowStep()),
             T("LOOK", () => new ColourStep()), T("LOOK", () => new RecolourStep()), T("LOOK", () => new LikeStep()), T("LOOK", () => new PaletteStep { colours = TexturePalette.ReadyColours(0), paletteName = TexturePalette.Ready[0].name }), T("LOOK", () => new DirtStep()), T("LOOK", () => new EdgeWearStep()), T("LOOK", () => new CrunchStep()),
             T("LOOK", () => new SharpenStep()), T("LOOK", () => new BlurStep()), T("LOOK", () => new PixelArtStep()),
-            T("SIZE AND SHAPE", () => new ResizeStep()), T("SIZE AND SHAPE", () => new FlipTurnStep()),
+            T("SIZE AND SHAPE", () => new ResizeStep()), T("SIZE AND SHAPE", () => new FlipTurnStep()), T("SIZE AND SHAPE", () => new WarpStep()), T("SIZE AND SHAPE", () => new MirrorStep()), T("SIZE AND SHAPE", () => new PolarStep()),
+            T("RETRO AND STYLE", () => new DitherStep()), T("RETRO AND STYLE", () => new HalftoneStep()), T("RETRO AND STYLE", () => new ScanlinesStep()), T("RETRO AND STYLE", () => new VhsStep()), T("RETRO AND STYLE", () => new InkStep()), T("RETRO AND STYLE", () => new PaintStep()), T("RETRO AND STYLE", () => new MosaicStep()),
+            T("AGE IT", () => new RustStep()), T("AGE IT", () => new GrowthStep()), T("AGE IT", () => new CracksStep()), T("AGE IT", () => new ScratchesStep()), T("AGE IT", () => new DripsStep()), T("AGE IT", () => new StainsStep()),
+            T("COLOUR", () => new GradientMapStep()), T("COLOUR", () => new LevelsStep()), T("COLOUR", () => new DuotoneStep()),
+            T("START FROM", () => new NoiseStep()), T("START FROM", () => new SurfaceStep()),
         };
         static Tool T(string g, Func<TextureStep> m) => new Tool { group = g, make = m, proto = m() };
 
@@ -114,7 +118,7 @@ namespace HienaDev.DevTools
         static bool HasTexture() => Selection.activeObject is Texture2D;
 
         void OnEnable()
-        {
+        { UseMetal();
             Undo.undoRedoPerformed += OnUndo;
             DecalPlacer.Changed += Repaint; ScenePainter.Changed += Repaint; PaletteStep.Source = () => Source(); PaletteStep.Poke = () => { Changed(true); Repaint(); };
             wantsMouseMove = true;
@@ -245,6 +249,7 @@ namespace HienaDev.DevTools
         void Update()
         {
             if (m_Page == Page.Patterns && (m_PatTask != null && m_PatTask.IsCompleted)) Repaint();
+            if (m_Page == Page.Moving) MovingTick();
             if (m_Page != Page.Edit) return; TilesTick();
             if (m_HoverTool != null && mouseOverWindow != this) { m_HoverTool = null; Repaint(); }
             Hover();
@@ -410,6 +415,7 @@ namespace HienaDev.DevTools
             else if (m_Page == Page.Decals) DecalsPage(body);
             else if (m_Page == Page.Patterns) PatternsPage(body);
             else if (m_Page == Page.Paint) PaintPage(body);
+            else if (m_Page == Page.Moving) MovingPage(body);
             else
             {
                 GUILayout.BeginArea(new Rect(body.x + 10, body.y + 6, body.width - 20, body.height - 10));
@@ -431,6 +437,7 @@ namespace HienaDev.DevTools
             if (Pill("Edit a texture", m_Page == Page.Edit, "Make it loop, hide the repeat, change its look, then save it (and its maps)")) m_Page = Page.Edit;
             if (Pill("Shrink many", m_Page == Page.Shrink, "Make lots of textures smaller in the build at once")) { if (m_Page != Page.Shrink) m_Rows = null; m_Page = Page.Shrink; }
             if (Pill("Patterns", m_Page == Page.Patterns, "Make bricks, planks, tiles, stones... from sliders, with no photo")) m_Page = Page.Patterns;
+            if (Pill("Moving & shaders", m_Page == Page.Moving, "Flipbooks (fire, caustics, lava...), flow maps and a shader maker for moving materials")) m_Page = Page.Moving;
             if (Pill("Paint", m_Page == Page.Paint, "Brush moss, dirt or snow onto things in the scene")) m_Page = Page.Paint;
             if (Pill("Decals", m_Page == Page.Decals, "Make blood, posters and bullet holes, and stick them on things in the scene")) m_Page = Page.Decals;
             if (Pill("Library", m_Page == Page.Library, "Everything made with Texture Studio in this project")) { m_Page = Page.Library; m_Lib = null; }
@@ -740,6 +747,14 @@ namespace HienaDev.DevTools
             bool model = m_View == View.Model;
             using (new EditorGUI.DisabledScope(!m_SaveNormal)) if (Num(ref m_NormalStrength, "Bumpiness", "How deep the normal map's bumps look", 0.05f, 8f)) { m_BumpTouched = true; if (model || m_View == View.Normal) Changed(); }
             using (new EditorGUI.DisabledScope(!m_SaveMask)) if (Num(ref m_Smooth, "Shine", "How smooth and shiny the surface is", 0f, 1f) && (model || m_View == View.Mask)) Changed();
+            using (new EditorGUI.DisabledScope(!m_SaveMask))
+            {
+                bool mc = Num(ref m_Metal, "Metal", "How metal it is (0: not metal). With the colour below: only where the picture is that colour", 0f, 1f);
+                bool bc = EditorGUILayout.ToggleLeft(new GUIContent("Metal only where it's this colour", "Bare metal showing through paint, rivets, gold trim..."), m_MetalByColour); if (bc != m_MetalByColour) { m_MetalByColour = bc; mc = true; if (bc && m_Metal < 0.05f) m_Metal = 1; }
+                if (m_MetalByColour) { var c = EditorGUILayout.ColorField(new GUIContent("Colour", "Pick a colour from the picture"), m_MetalColour); if (c != m_MetalColour) { m_MetalColour = c; mc = true; } mc |= Num(ref m_MetalRange, "Colour range", "How close a colour has to be", 0.02f, 1f); }
+                if (mc) { UseMetal(); if (model || m_View == View.Mask) Changed(); }
+            }
+            bool cv = EditorGUILayout.ToggleLeft(new GUIContent("Curvature map too", "Edges bright, dips dark, flat grey: for your own shaders, or to drive wear and dirt"), m_SaveCurve); if (cv != m_SaveCurve) m_SaveCurve = cv;
             if (m_SaveHeight)
             {
                 if (Num(ref m_HeightContrast, "Height contrast", "How far apart high and low are", 0.3f, 4f)) Changed();
@@ -1002,6 +1017,7 @@ namespace HienaDev.DevTools
             return p;
         }
 
+        void UseMetal() => TextureOpsMore.Metal = new TextureOpsMore.MetalSettings { all = m_Metal, byColour = m_MetalByColour, colour = m_MetalColour, range = m_MetalRange };
         Pixels Map(Pixels result, View v, float scale) => Map(result, v, scale, m_NormalStrength, m_AO, m_Smooth, m_HeightContrast, m_HeightSmooth, m_HeightInvert);
 
         static Pixels Map(Pixels result, View v, float scale, float bumps, float aoAmount, float shine, float heightContrast, float heightSmooth, bool heightInvert)
@@ -1102,6 +1118,7 @@ namespace HienaDev.DevTools
                 if (m_SaveNormal || m_MakeMaterial) normal = Put2(Map(result, View.Normal, 1f), "_Normal", true);
                 if (m_SaveHeight) height = Put2(Map(result, View.Height, 1f), "_Height", false);
                 if (m_SaveMask || m_MakeMaterial) mask = Put2(Map(result, View.Mask, 0f), "_Mask", false);
+                if (m_SaveCurve) Put2(TextureOpsMore.Curvature(result), "_Curvature", false);
                 if (vary != null && vary.save != VariationsStep.Save.OneBig) { var tiles = VariationTiles(vary, beforeLast); for (int i = 0; i < tiles.Count; i++) Put2(tiles[i], "_Tile" + (i + 1), false); }
                 Texture2D glowTex = null; var glow = GlowOn; if (glow != null && glow.Any) glowTex = Put2(glow.Map(result), "_Glow", false);
                 if (m_Bands.on && m_Bands.apart) SaveApart(result, folder, name, Put2, outputs, see);

@@ -23,7 +23,7 @@ namespace HienaDev.DevTools
             EditorGUILayout.BeginHorizontal(); if (GUILayout.Button("Select all its pieces")) Selection.objects = Pieces(m).Select(p => (Object)p.gameObject).ToArray(); if (GUILayout.Button("Remove it")) { foreach (var p in Pieces(m)) Undo.DestroyObjectImmediate(p.gameObject); GUIUtility.ExitGUI(); } EditorGUILayout.EndHorizontal();
         }
 
-        static DecalMark[] Pieces(DecalMark m) => Object.FindObjectsByType<DecalMark>(FindObjectsInactive.Include, FindObjectsSortMode.None).Where(d => d.group == m.group).ToArray();
+        static DecalMark[] Pieces(DecalMark m) => TsFind.All<DecalMark>(true).Where(d => d.group == m.group).ToArray();
 
         void OnSceneGUI()
         {

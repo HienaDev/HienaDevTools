@@ -110,13 +110,13 @@ namespace HienaDev.DevTools
 
         static IEnumerable<Surface> Surfaces(Func<Bounds, bool> wanted, Bounds? box = null)
         {
-            foreach (var r in UnityEngine.Object.FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None))
+            foreach (var r in TsFind.All<MeshRenderer>())
             {
                 if (!r.enabled || r.GetComponent<DecalMark>() || (r.hideFlags & HideFlags.HideInHierarchy) != 0 || !wanted(r.bounds)) continue; var f = r.GetComponent<MeshFilter>(); if (!f || !f.sharedMesh) continue;
                 if (!Known(f.sharedMesh, out var v, out var n, out var t)) continue;
                 yield return new Surface { v = v, n = n, t = t, m = f.transform.localToWorldMatrix, b = r.bounds, owner = f.transform };
             }
-            foreach (var r in UnityEngine.Object.FindObjectsByType<SkinnedMeshRenderer>(FindObjectsSortMode.None))
+            foreach (var r in TsFind.All<SkinnedMeshRenderer>())
             {
                 if (!r.enabled || !r.sharedMesh || !wanted(r.bounds)) continue; var baked = new Mesh(); r.BakeMesh(baked, true); bool ok = Read(baked, out var v, out var n, out var t); UnityEngine.Object.DestroyImmediate(baked); if (ok) yield return new Surface { v = v, n = n, t = t, m = r.transform.localToWorldMatrix, b = r.bounds, owner = r.transform, skin = r };
             }

@@ -1,3 +1,4 @@
+using System.Linq;
 using UnityEngine;
 
 namespace HienaDev.DevTools
@@ -284,7 +285,7 @@ namespace HienaDev.DevTools
         }
 
         /// <summary>Below its surroundings (negative) or above them (positive): cracks and dips are negative.</summary>
-        static float[] Cavity(float[] h, int w, int hh)
+        public static float[] Cavity(float[] h, int w, int hh)
         {
             var px = new Pixels(w, hh, false); for (int i = 0; i < h.Length; i++) px.c[i] = new Color(h[i], h[i], h[i], 1);
             var wide = Blur(px, 12f);
@@ -303,14 +304,33 @@ namespace HienaDev.DevTools
         /// <summary>Metallic (R), ambient occlusion (G), unused (B), smoothness (A): what URP's Lit material reads
         /// from its Metallic map (R, A) and Occlusion map (G). AO: dips and cracks get darker. Smoothness: from how
         /// bright and how flat each spot is.</summary>
+        /// <summary>How metal the surface is (the window sets it): all over, or only where the picture is close to a colour.</summary>
+        public struct MetalSettings { public float all; public bool byColour; public Color colour; public float range; }
+        public static MetalSettings Metal;
+        public static float MetalAt(Color c) { var m = Metal; if (!m.byColour) return m.all; float d = Mathf.Sqrt((c.r - m.colour.r) * (c.r - m.colour.r) + (c.g - m.colour.g) * (c.g - m.colour.g) + (c.b - m.colour.b) * (c.b - m.colour.b)); return Mathf.Clamp01((m.range - d) / Mathf.Max(0.02f, m.range * 0.35f)) * Mathf.Max(0.05f, m.all); }
+        /// <summary>Light that can't reach a spot because the bumps round it are higher (looked for in 8 directions).</summary>
+        public static float[] Occlusion(float[] h, int w, int hh, float radius)
+        {
+            var o = new float[h.Length]; int steps = 5; float rr = Mathf.Max(2, radius); var dirs = Enumerable.Range(0, 8).Select(k => new Vector2(Mathf.Cos(k * Mathf.PI / 4), Mathf.Sin(k * Mathf.PI / 4))).ToArray();
+            float H(int x, int y) { x %= w; if (x < 0) x += w; y %= hh; if (y < 0) y += hh; return h[y * w + x]; }
+            TextureOps.Rows(hh, y => { for (int x = 0; x < w; x++) { float h0 = h[y * w + x], occ = 0; foreach (var d in dirs) { float best = 0; for (int s = 1; s <= steps; s++) { float dist = rr * s / steps; float dh = H(Mathf.RoundToInt(x + d.x * dist), Mathf.RoundToInt(y + d.y * dist)) - h0; best = Mathf.Max(best, dh / (dist / rr) * 0.5f); } occ += Mathf.Clamp01(best); } o[y * w + x] = 1 - occ / 8; } });
+            return o;
+        }
+        /// <summary>Edges up (bright) and dips down (dark), grey where it's flat: rust, wear and dirt follow it.</summary>
+        public static Pixels Curvature(Pixels p, float strength = 1f)
+        {
+            var h = Height(p, 0.2f); var cav = Cavity(h, p.w, p.h); var r = new Pixels(p.w, p.h, false);
+            for (int i = 0; i < h.Length; i++) { float v = Mathf.Clamp01(0.5f + cav[i] * 4f * strength); r.c[i] = new Color(v, v, v, 1); }
+            return r;
+        }
         public static Pixels MaskMap(Pixels p, float aoStrength, float smoothness, float metallic)
         {
             var h = Height(p, 0.3f);
-            var cav = Cavity(h, p.w, p.h);
+            var cav = Cavity(h, p.w, p.h); var occ = Occlusion(h, p.w, p.h, Mathf.Max(p.w, p.h) * 0.012f);
             var r = new Pixels(p.w, p.h, false);
             for (int i = 0; i < h.Length; i++)
             {
-                float ao = Mathf.Clamp01(1 + Mathf.Min(0, cav[i]) * 4f * aoStrength);
+                float ao = Mathf.Clamp01(1 + Mathf.Min(0, cav[i]) * 4f * aoStrength) * Mathf.Lerp(1, occ[i], Mathf.Clamp01(aoStrength)); metallic = Mathf.Max(0, MetalAt(p.c[i]));
                 float sm = Mathf.Clamp01(smoothness * (0.6f + 0.4f * h[i]) * ao);
                 r.c[i] = new Color(metallic, ao, 0, sm);
             }

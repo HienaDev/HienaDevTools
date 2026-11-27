@@ -34,7 +34,7 @@ namespace HienaDev.DevTools
         Vector2 m_LeftScroll, m_RightScroll; GUIStyle m_Head, m_Hint, m_Big, m_Small, m_Key;
 
         [MenuItem("Tools/Building Builder", false, 162)]
-        public static void Open() { var w = GetWindow<BuildingWindow>("Building Builder"); w.minSize = new Vector2(900, 560); if (!w.m_B) w.m_B = Selection.activeGameObject ? Selection.activeGameObject.GetComponentInParent<Building>() : UnityEngine.Object.FindFirstObjectByType<Building>(); }
+        public static void Open() { var w = GetWindow<BuildingWindow>("Building Builder"); w.minSize = new Vector2(900, 560); if (!w.m_B) w.m_B = Selection.activeGameObject ? Selection.activeGameObject.GetComponentInParent<Building>() : BbFind.Any<Building>(); }
         public static void Open(Building b) { Open(); var w = GetWindow<BuildingWindow>(); w.m_B = b; w.Frame(); w.Repaint(); }
 
         void OnEnable() { SceneView.duringSceneGui += Scene; Undo.undoRedoPerformed += AfterUndo; Selection.selectionChanged += Picked; EditorApplication.projectChanged += ProjectChanged; wantsMouseMove = true; }
@@ -216,5 +216,19 @@ namespace HienaDev.DevTools
             EditorGUI.BeginChangeCheck(); DrawPropertiesExcluding(serializedObject, "floors"); bool ch = serializedObject.ApplyModifiedProperties(); if (EditorGUI.EndChangeCheck() || ch) BuildingMaker.Rebuild((Building)target);
             EditorGUILayout.HelpBox(((Building)target).floors.Count + " floors. Draw it in the Building Builder; what it makes (its children) is made again after every change.", MessageType.None);
         }
+    }
+
+    /// <summary>Finds scene objects the same way on Unity 6.0 to 6.6+ (6.6 renamed the calls, the old ones only warn).</summary>
+    static class BbFind
+    {
+        public static T[] All<T>(bool inactive = false) where T : UnityEngine.Object
+        {
+#if UNITY_6000_6_OR_NEWER
+            return UnityEngine.Object.FindObjectsByType<T>(inactive ? FindObjectsInactive.Include : FindObjectsInactive.Exclude);
+#else
+            return UnityEngine.Object.FindObjectsByType<T>(inactive ? FindObjectsInactive.Include : FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+#endif
+        }
+        public static T Any<T>() where T : UnityEngine.Object => UnityEngine.Object.FindAnyObjectByType<T>();
     }
 }

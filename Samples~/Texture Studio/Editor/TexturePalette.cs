@@ -111,6 +111,8 @@ namespace HienaDev.DevTools
         public Texture2D from;
         [NonSerialized] int m_Picked = -1;
         static Dictionary<string, List<Color>> s_Mine; static List<string> s_MineNames;
+        /// <summary>Re-reads the saved palettes next time (one was saved or deleted somewhere else).</summary>
+        public static void Forget() { s_Mine = null; }
         public override string Title => "Palette";
         public override string Blurb => "Recolour with a shared set of colours";
         public override string Explain => "Uses the same few colours on every texture, so things from different places fit together. Click a palette, drop a texture to take its colours, or make one from a single colour.";
@@ -220,5 +222,44 @@ namespace HienaDev.DevTools
 
         /// <summary>(the window fills these in: the texture being edited, and how to say something changed from a menu)</summary>
         public static Func<Pixels> Source; public static Action Poke;
+    }
+
+    /// <summary>One palette library for the whole Texture Studio: your saved palettes, the ready ones, gradients, retro
+    /// palettes and the effects' own colours. Any colour list (palette step, gradient map, dithering, flipbooks) can pick
+    /// from it and save into it.</summary>
+    public static class PaletteLibrary
+    {
+        public static List<(string group, string name, List<Color> cols)> All()
+        {
+            var l = new List<(string, string, List<Color>)>();
+            foreach (var n in TextureShelf.Palettes) { var c = TextureShelf.LoadPalette(n); if (c != null && c.Count > 0) l.Add(("My palettes", n, c)); }
+            for (int i = 0; i < TexturePalette.Ready.Length; i++) l.Add(("Ready", TexturePalette.Ready[i].name, TexturePalette.ReadyColours(i)));
+            foreach (var g in GradientMapStep.Ready) l.Add(("Gradients", g.name, g.c.Select(FxOps.Hex).ToList()));
+            foreach (var d in DitherStep.Palettes) if (d.hex != null) l.Add(("Retro", d.name, d.hex.Select(FxOps.Hex).ToList()));
+            for (int k = 0; k < (int)TextureMoving.Kind.Scroll; k++) l.Add(("Effects", TextureMoving.Names[k], TextureMoving.Ramp((TextureMoving.Kind)k).Item1.ToList()));
+            return l;
+        }
+        /// <summary>Dark to bright, the way a gradient or a flame reads its colours.</summary>
+        public static List<Color> DarkToBright(List<Color> c) => c.OrderBy(x => TexturePalette.Lab(x).x).ToList();
+        /// <summary>At most n colours, spread evenly through the list.</summary>
+        public static List<Color> AtMost(List<Color> c, int n) => c.Count <= n ? c : Enumerable.Range(0, n).Select(i => c[Mathf.RoundToInt(i * (c.Count - 1) / (float)(n - 1))]).ToList();
+        public static void Menu(Action<List<Color>, string> pick)
+        {
+            var m = new GenericMenu(); var all = All(); if (!all.Any(p => p.group == "My palettes")) m.AddDisabledItem(new GUIContent("My palettes/(none saved yet)"));
+            foreach (var p in all) { var q = p; m.AddItem(new GUIContent(q.group + "/" + q.name), false, () => { pick(q.cols, q.name); PaletteStep.Poke?.Invoke(); }); }
+            m.ShowAsContext();
+        }
+        public static void SaveAs(List<Color> colours, string suggested)
+        {
+            var c = colours.ToList(); EditorApplication.delayCall += () => { var nm = NamePrompt.Ask("Save palette", "Name for this palette", string.IsNullOrEmpty(suggested) ? "My palette" : suggested, x => TextureShelf.HasPalette(x) ? "There's one with that name: it'll be replaced." : ""); if (nm != null) { TextureShelf.SavePalette(nm, c); PaletteStep.Forget(); } };
+        }
+        /// <summary>"Palette library" and "Save as a palette" buttons on one row.</summary>
+        public static void Buttons(Action<List<Color>, string> pick, List<Color> current, string name = "")
+        {
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(new GUIContent("Palette library \u25be", "Your saved palettes and the ready ones: the same library as the Palette tool on the Edit page"), EditorStyles.miniButton)) Menu(pick);
+            if (GUILayout.Button(new GUIContent("Save as a palette", "Keeps these colours in the library, for every tool and every project"), EditorStyles.miniButton)) SaveAs(current, name);
+            GUILayout.EndHorizontal();
+        }
     }
 }

@@ -37,7 +37,7 @@ namespace HienaDev.DevTools
         public static int Dab(Vector3 at, Vector3 normal, float radius)
         {
             int made = 0; var box = new Bounds(at, Vector3.one * radius * 2); int under = 0;
-            foreach (var l in UnityEngine.Object.FindObjectsByType<PaintedLayer>(FindObjectsSortMode.None)) foreach (var d in l.dabs) if ((l.transform.TransformPoint(d.at) - at).magnitude < (radius + d.radius) * 0.95f) under = Mathf.Max(under, d.level + 1);
+            foreach (var l in TsFind.All<PaintedLayer>()) foreach (var d in l.dabs) if ((l.transform.TransformPoint(d.at) - at).magnitude < (radius + d.radius) * 0.95f) under = Mathf.Max(under, d.level + 1);
             DecalPlacer.LiftScale = 1 + Mathf.Min(under, 24) * 0.45f; bool wrap = DecalPlacer.Wrap; DecalPlacer.Wrap = false; List<DecalPlacer.Piece> pieces; try { pieces = DecalPlacer.Pieces(at, normal, radius * 2, radius * 0.75f, box); } finally { DecalPlacer.LiftScale = 1; DecalPlacer.Wrap = wrap; }
             foreach (var p in pieces)
             {
@@ -58,7 +58,7 @@ namespace HienaDev.DevTools
         /// <summary>Takes away the dabs whose middle is under the brush.</summary>
         public static int Rub(Vector3 at, float radius)
         {
-            int gone = 0; foreach (var l in UnityEngine.Object.FindObjectsByType<PaintedLayer>(FindObjectsSortMode.None))
+            int gone = 0; foreach (var l in TsFind.All<PaintedLayer>())
             {
                 var f = l.GetComponent<MeshFilter>(); var r = l.GetComponent<MeshRenderer>(); if (!f.sharedMesh || Material && r.sharedMaterial != Material || !r.bounds.Intersects(new Bounds(at, Vector3.one * radius * 2))) continue; var keep = l.dabs.Where(d => (l.transform.TransformPoint(d.at) - at).magnitude > radius * 0.9f).ToList(); if (keep.Count == l.dabs.Count) continue; Keep(l, f); gone += l.dabs.Count - keep.Count;
                 var mesh = f.sharedMesh; var v = new List<Vector3>(); mesh.GetVertices(v); var n = new List<Vector3>(); mesh.GetNormals(n); var uv = new List<Vector2>(); mesh.GetUVs(0, uv); var t = new List<int>(); if (mesh.vertexCount > 0) mesh.GetTriangles(t, 0); var nv = new List<Vector3>(); var nn = new List<Vector3>(); var nu = new List<Vector2>(); var nt = new List<int>(); var nd = new List<PaintedLayer.Dab>();
@@ -101,5 +101,19 @@ namespace HienaDev.DevTools
         {
             if (!AssetDatabase.IsValidFolder(folder)) AssetDatabase.CreateFolder(System.IO.Path.GetDirectoryName(folder).Replace('\\', '/'), System.IO.Path.GetFileName(folder)); var name = TextureShelf.Clean(m_PaintName); if (name.Length == 0) name = "Paint"; var m = new Material(Shader.Find(PaintShader)); PaintFill(m); AssetDatabase.CreateAsset(m, AssetDatabase.GenerateUniqueAssetPath(folder + "/" + name + ".mat")); AssetDatabase.SaveAssetIfDirty(m); m_PaintMat = m; m_PaintName = m.name; ScenePainter.Material = m; m_PaintList = null; return m;
         }
+    }
+
+    /// <summary>Finds scene objects the same way on Unity 6.0 to 6.6+ (6.6 renamed the calls, the old ones only warn).</summary>
+    static class TsFind
+    {
+        public static T[] All<T>(bool inactive = false) where T : UnityEngine.Object
+        {
+#if UNITY_6000_6_OR_NEWER
+            return UnityEngine.Object.FindObjectsByType<T>(inactive ? FindObjectsInactive.Include : FindObjectsInactive.Exclude);
+#else
+            return UnityEngine.Object.FindObjectsByType<T>(inactive ? FindObjectsInactive.Include : FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+#endif
+        }
+        public static T Any<T>() where T : UnityEngine.Object => UnityEngine.Object.FindAnyObjectByType<T>();
     }
 }

@@ -41,7 +41,7 @@ namespace HienaDev.DevTools
             for (int i = 0; i < n; i++) { var h = m_Hits[i]; if (h.distance >= best || h.collider.GetComponentInParent<BuildingDoor>()) continue; best = h.distance; hit = h; any = true; }
             return any;
         }
-        List<Collider> m_Cols; double m_ColsAt; IEnumerable<Collider> Colliders() { if (m_Cols == null || EditorApplication.timeSinceStartup - m_ColsAt > 1) { m_ColsAt = EditorApplication.timeSinceStartup; m_Cols = Object.FindObjectsByType<Collider>(FindObjectsSortMode.None).Where(c => c.enabled && c.gameObject.activeInHierarchy && !c.isTrigger && !c.GetComponentInParent<BuildingDoor>()).ToList(); } return m_Cols; }
+        List<Collider> m_Cols; double m_ColsAt; IEnumerable<Collider> Colliders() { if (m_Cols == null || EditorApplication.timeSinceStartup - m_ColsAt > 1) { m_ColsAt = EditorApplication.timeSinceStartup; m_Cols = BbFind.All<Collider>().Where(c => c.enabled && c.gameObject.activeInHierarchy && !c.isTrigger && !c.GetComponentInParent<BuildingDoor>()).ToList(); } return m_Cols; }
 
         void WalkTick()
         {
